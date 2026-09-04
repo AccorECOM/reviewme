@@ -1,0 +1,17 @@
+# Reviewer traductions : complétude et qualité des chaînes localisées.
+output_mode = "mixed"
+priority = 30
+precheck = "precheck.py"   # les clés manquantes sont un FAIT : script gratuit, pas de LLM
+
+[when]
+# Ne se déclenche que si la PR touche des fichiers de localisation (ADR v3 D4, niveau 2) :
+# sans ce filtre, chaque PR paierait ce reviewer pour rien.
+paths = [
+  "**/*.strings",
+  "**/*.stringsdict",
+  "**/values*/strings.xml",
+  "**/locales/**/*.json",
+  "**/i18n/**/*.json",
+]
+
+# enabled = false        # met ce reviewer en sommeil sans supprimer son dossier

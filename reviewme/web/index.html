@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ReviewMe - Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>ReviewMe</h1>
+        <p class="subtitle">Autonomous PR Review Bot powered by Claude Code</p>
+        <div class="stats" id="stats"></div>
+    </header>
+
+    <main>
+        <section class="tabs">
+            <button class="tab active" data-tab="reviews">Reviews</button>
+            <button class="tab" data-tab="hall-of-fame">Hall of Fame</button>
+            <button class="tab" data-tab="errors">Errors</button>
+            <button class="tab" data-tab="logs">Logs</button>
+        </section>
+
+        <section id="reviews" class="panel active">
+            <div id="reviews-list" class="card-list"></div>
+        </section>
+
+        <section id="hall-of-fame" class="panel">
+            <div class="hof-sprint-bar">
+                <label for="hof-sprint-select">Sprint</label>
+                <select id="hof-sprint-select" onchange="loadHallOfFame(this.value)"></select>
+                <span id="hof-sprint-range" class="hof-sprint-range"></span>
+            </div>
+            <div id="hof-global" class="hof-global-stats"></div>
+            <div id="hof-categories" class="hof-grid"></div>
+            <div id="hof-leaderboard-section" class="hof-section">
+                <h2 class="hof-section-title">Classement general</h2>
+                <div id="hof-leaderboard" class="hof-leaderboard"></div>
+            </div>
+        </section>
+
+        <section id="errors" class="panel">
+            <div id="errors-list" class="card-list"></div>
+        </section>
+
+        <section id="logs" class="panel">
+            <div id="logs-list" class="log-list"></div>
+        </section>
+    </main>
+
+    <script>
+        const API = '';
+
+        // Tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        function timeAgo(iso) {
+            const d = new Date(iso);
+            const now = new Date();
+            const diff = Math.floor((now - d) / 1000);
+            if (diff < 60) return `${diff}s ago`;
+            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+            return `${Math.floor(diff / 86400)}d ago`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadDashboard() {
+            try {
+                const [stateRes, reviewsRes, logsRes] = await Promise.all([
+                    fetch(`${API}/api/state`),
+                    fetch(`${API}/api/reviews`),
+                    fetch(`${API}/api/logs`),
+                ]);
+
+                const state = await stateRes.json();
+                const reviews = await reviewsRes.json();
+                const logs = await logsRes.json();
+
+                renderStats(state, reviews);
+                renderReviews(reviews);
+                renderErrors(state.errors || {});
+                renderLogs(logs);
+            } catch (e) {
+                document.getElementById('stats').innerHTML = '<span class="stat error">API offline</span>';
+            }
+        }
+
+        function renderStats(state, reviews) {
+            const reviewed = Object.keys(state.reviewed || {}).length;
+            const errors = Object.keys(state.errors || {}).length;
+            const totalCost = reviews.reduce((sum, r) => sum + (r.cost_usd || 0), 0);
+            const totalTokens = reviews.reduce((sum, r) => sum + (r.input_tokens || 0) + (r.output_tokens || 0), 0);
+            const tokensK = totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(0)}k` : totalTokens;
+            document.getElementById('stats').innerHTML = `
+                <span class="stat success">${reviewed} reviewed</span>
+                <span class="stat error">${errors} errors</span>
+                <span class="stat info">${reviewed + errors} total</span>
+                <span class="stat cost">$${totalCost.toFixed(4)}</span>
+                <span class="stat tokens">${tokensK} tokens</span>
+            `;
+        }
+
+        function renderReviews(reviews) {
+            const el = document.getElementById('reviews-list');
+            if (!reviews.length) {
+                el.innerHTML = '<div class="empty">No reviews yet</div>';
+                return;
+            }
+            el.innerHTML = reviews.map((r, i) => {
+                const cost = r.cost_usd ? `$${r.cost_usd.toFixed(4)}` : '-';
+                const inTok = r.input_tokens || 0;
+                const outTok = r.output_tokens || 0;
+                const cacheRead = r.cache_read_tokens || 0;
+                const cacheCreate = r.cache_create_tokens || 0;
+                const uncached = inTok - cacheRead - cacheCreate;
+                const tokens = inTok + outTok;
+                const tokensStr = tokens > 1000 ? `${(tokens / 1000).toFixed(0)}k tok` : `${tokens} tok`;
+                const fmt = v => v > 1000 ? `${(v / 1000).toFixed(1)}k` : v;
+                const cachePct = inTok > 0 ? Math.round((cacheRead / inTok) * 100) : 0;
+                const duration = r.duration_ms ? `${(r.duration_ms / 1000).toFixed(0)}s` : '-';
+                const diffSize = r.diff_size_kb ? `${r.diff_size_kb.toFixed(0)} KB` : '-';
+                const id = `review-${i}`;
+                return `
+                <div class="card">
+                    <div class="card-header collapsible" onclick="toggle('${id}')">
+                        <span class="chevron" id="chevron-${id}">&#9654;</span>
+                        <span class="pr-number">#${r.pr_number}</span>
+                        <span class="pr-title">${escapeHtml(r.pr_title)}</span>
+                        <span class="card-meta">
+                            <span class="meta-item cost-badge">${cost}</span>
+                            <span class="meta-item has-tooltip">${tokensStr}<span class="tooltip"><span class="tt-line">in: ${fmt(uncached)} new + ${fmt(cacheRead)} cache (${cachePct}%) + ${fmt(cacheCreate)} write</span><span class="tt-sep"></span><span class="tt-line">out: ${fmt(outTok)}</span></span></span>
+                            <span class="meta-item">${duration}</span>
+                            <span class="meta-item">${diffSize}</span>
+                        </span>
+                        <span class="sha">${r.head_sha?.slice(0, 8) || ''}</span>
+                        <button class="btn-requeue" onclick="event.stopPropagation(); requeue(${r.pr_number})" title="Re-review this PR">&#8635;</button>
+                    </div>
+                    <div class="card-body collapsed" id="${id}">
+                        <pre>${escapeHtml(r.review)}</pre>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function renderErrors(errors) {
+            const el = document.getElementById('errors-list');
+            const entries = Object.entries(errors);
+            if (!entries.length) {
+                el.innerHTML = '<div class="empty">No errors</div>';
+                return;
+            }
+            el.innerHTML = entries.map(([num, e]) => `
+                <div class="card error-card">
+                    <div class="card-header">
+                        <span class="pr-number">#${num}</span>
+                        <span class="pr-title">${escapeHtml(e.title)}</span>
+                        <span class="time">${timeAgo(e.failed_at)}</span>
+                    </div>
+                    <div class="card-body">
+                        <pre class="error-msg">${escapeHtml(e.error)}</pre>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderLogs(logs) {
+            const el = document.getElementById('logs-list');
+            if (!logs.length) {
+                el.innerHTML = '<div class="empty">No logs yet</div>';
+                return;
+            }
+            el.innerHTML = logs.slice(0, 100).map(l => {
+                const levelClass = l.level === 'ERROR' ? 'error' : l.level === 'WARNING' ? 'warn' : '';
+                return `<div class="log-entry ${levelClass}">
+                    <span class="log-ts">${l.ts?.slice(11, 19) || ''}</span>
+                    <span class="log-level">${l.level}</span>
+                    <span class="log-msg">${escapeHtml(l.msg)}</span>
+                </div>`;
+            }).join('');
+        }
+
+        async function requeue(prNumber) {
+            await fetch(`${API}/api/requeue/${prNumber}`, { method: 'POST' });
+            loadDashboard();
+        }
+
+        function toggle(id) {
+            const el = document.getElementById(id);
+            const chevron = document.getElementById('chevron-' + id);
+            el.classList.toggle('collapsed');
+            chevron.classList.toggle('open');
+        }
+
+        const HOF_ICONS = {
+            gold: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
+            fire: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2c0 4-4 6-4 10a4 4 0 108 0c0-4-4-6-4-10z"/></svg>',
+            loop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>',
+            heavy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v3"/></svg>',
+            clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+            bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+            chip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>',
+            leaf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 8C8 10 5.9 16.17 3.82 21.34l1.89.66L17 8z"/><path d="M20.59 6.41A10 10 0 003 20"/></svg>',
+        };
+
+        const PODIUM_MEDALS = ['#FFD700', '#C0C0C0', '#CD7F32', '#58a6ff', '#58a6ff'];
+
+        let hofSprint = null; // currently selected sprint id ('all' or a number), null = server default
+
+        async function loadHallOfFame(sprintId) {
+            if (sprintId !== undefined) hofSprint = sprintId;
+            try {
+                const q = hofSprint != null ? `?sprint=${encodeURIComponent(hofSprint)}` : '';
+                const res = await fetch(`${API}/api/hall-of-fame${q}`);
+                const data = await res.json();
+                hofSprint = data.selected;
+                renderHofSprintBar(data.sprints, data.selected);
+                renderHofGlobal(data.total);
+                renderHofCategories(data.categories);
+                renderHofLeaderboard(data.dev_leaderboard);
+            } catch (e) {
+                document.getElementById('hof-global').innerHTML = '<span class="stat error">Hall of Fame offline</span>';
+            }
+        }
+
+        function renderHofSprintBar(sprints, selected) {
+            const sel = document.getElementById('hof-sprint-select');
+            if (!sprints || !sprints.length) return;
+            sel.innerHTML = sprints.map(s => {
+                const label = s.is_current ? `${s.label} (en cours)` : s.label;
+                return `<option value="${s.id}" ${s.id === String(selected) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+            }).join('');
+            const cur = sprints.find(s => s.id === String(selected));
+            const range = document.getElementById('hof-sprint-range');
+            range.textContent = (cur && cur.id !== 'all') ? 'Classement sur la periode du sprint' : 'Classement depuis le tout debut';
+        }
+
+        function renderHofGlobal(total) {
+            if (!total || !total.review_count) return;
+            const tokStr = total.total_tokens > 1000000 ? (total.total_tokens / 1000000).toFixed(1) + 'M' : (total.total_tokens / 1000).toFixed(0) + 'k';
+            document.getElementById('hof-global').innerHTML = `
+                <div class="hof-stat-row">
+                    <div class="hof-big-stat">
+                        <span class="hof-big-number">$${total.total_cost}</span>
+                        <span class="hof-big-label">total brule</span>
+                    </div>
+                    <div class="hof-big-stat">
+                        <span class="hof-big-number">${total.dev_count}</span>
+                        <span class="hof-big-label">devs</span>
+                    </div>
+                    <div class="hof-big-stat">
+                        <span class="hof-big-number">${total.pr_count}</span>
+                        <span class="hof-big-label">PRs</span>
+                    </div>
+                    <div class="hof-big-stat">
+                        <span class="hof-big-number">${total.review_count}</span>
+                        <span class="hof-big-label">reviews</span>
+                    </div>
+                    <div class="hof-big-stat">
+                        <span class="hof-big-number">${total.total_duration_h}h</span>
+                        <span class="hof-big-label">de reflexion IA</span>
+                    </div>
+                    <div class="hof-big-stat">
+                        <span class="hof-big-number">${tokStr}</span>
+                        <span class="hof-big-label">tokens</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderHofCategories(categories) {
+            const el = document.getElementById('hof-categories');
+            if (!categories || !categories.length) {
+                el.innerHTML = '<div class="empty">Pas encore de donnees</div>';
+                return;
+            }
+            el.innerHTML = categories.map(c => `
+                <div class="hof-card hof-card--${c.icon}">
+                    <div class="hof-card-top">
+                        <div class="hof-card-icon">${HOF_ICONS[c.icon] || ''}</div>
+                        <div class="hof-card-title">${escapeHtml(c.title)}</div>
+                    </div>
+                    <div class="hof-card-subtitle">${escapeHtml(c.subtitle)}</div>
+                    <div class="hof-card-dev">${escapeHtml(c.detail)}</div>
+                    <div class="hof-card-value">${escapeHtml(c.value)}</div>
+                    <div class="hof-card-meta">
+                        <span>${escapeHtml(c.label)}</span>
+                        <span>${escapeHtml(c.extra)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderHofLeaderboard(devs) {
+            const el = document.getElementById('hof-leaderboard');
+            if (!devs || !devs.length) {
+                el.innerHTML = '<div class="empty">Pas de donnees</div>';
+                return;
+            }
+            el.innerHTML = `
+                <div class="hof-lb-header">
+                    <span class="hof-lb-h-rank"></span>
+                    <span class="hof-lb-h-name">Dev</span>
+                    <span class="hof-lb-h-cost">Total</span>
+                    <span class="hof-lb-h-stat">PRs</span>
+                    <span class="hof-lb-h-stat">Reviews</span>
+                    <span class="hof-lb-h-stat">Avg/PR</span>
+                    <span class="hof-lb-h-stat">x/PR</span>
+                    <span class="hof-lb-h-stat">Diff moy.</span>
+                    <span class="hof-lb-h-stat">Tokens</span>
+                    <span class="hof-lb-h-worst">Pire PR</span>
+                </div>
+            ` + devs.map((d, i) => `
+                <div class="hof-lb-row ${i === 0 ? 'hof-lb-row--first' : ''}">
+                    <span class="hof-lb-rank" style="color:${PODIUM_MEDALS[i] || '#8b949e'}">${i < 3 ? ['&#9733;','&#9734;','&#9734;'][i] : '#' + (i+1)}</span>
+                    <span class="hof-lb-name">@${escapeHtml(d.author)}</span>
+                    <span class="hof-lb-cost">$${d.total_cost.toFixed(2)}</span>
+                    <span class="hof-lb-stat">${d.pr_count}</span>
+                    <span class="hof-lb-stat">${d.review_count}</span>
+                    <span class="hof-lb-stat">$${d.avg_cost_per_pr.toFixed(2)}</span>
+                    <span class="hof-lb-stat">${d.avg_reviews_per_pr}x</span>
+                    <span class="hof-lb-stat">${d.avg_diff_kb} KB</span>
+                    <span class="hof-lb-stat">${d.tokens}</span>
+                    <span class="hof-lb-worst">#${d.worst_pr} (${d.worst_pr_reviews}x)</span>
+                </div>
+            `).join('');
+        }
+
+        loadDashboard();
+        loadHallOfFame();
+        setInterval(loadDashboard, 10000);
+        setInterval(loadHallOfFame, 30000);
+    </script>
+</body>
+</html>

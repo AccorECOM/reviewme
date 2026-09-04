@@ -1,0 +1,25 @@
+# Reviewer technique : architecture, sécurité, performance, fiabilité, conventions.
+output_mode = "inline"     # findings ancrés sur les lignes du diff
+priority = 10              # passe en premier (le plus utile si le budget vient à manquer)
+# model = "claude-opus-4-8"  # modèle de CE reviewer ; vide = CLAUDE_MODEL, sinon défaut CLI
+# when.paths absent = se déclenche sur toute PR
+
+# enabled = false        # met ce reviewer en sommeil sans supprimer son dossier
+
+[context]
+# Conventions du projet, LUES DANS LE DÉPÔT reviewé à chaque review (jamais recopiées ici :
+# une copie diverge du repo dès la première évolution). Fichier -> contenu injecté ;
+# dossier -> inventaire de ses .md. Un chemin introuvable est signalé en WARNING.
+read = [
+  "AGENTS.md",
+  "CONTRIBUTING.md",
+  "docs/",
+]
+
+# [plugins]
+# Skills et agents dont ce reviewer a besoin, installés avant la review (idempotent).
+# ⚠️ Un plugin est du CODE TIERS qui tourne aux côtés des secrets du job : le relire comme
+# du code. Le core garde son allowlist d'outils — un skill de plugin n'obtient pas plus de
+# droits que le reviewer.
+# marketplaces = ["owner/marketplace-repo"]
+# install      = ["mon-plugin"]            # ou "mon-plugin@marketplace"
