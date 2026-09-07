@@ -216,9 +216,18 @@ def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logge
         })
 
         # Compteurs agrégés, sans contenu : transportables par un cache de CI.
-        enregistrer_stats(pr_number, head_sha, author, project.name,
-                          [s.id for s, _ in outcomes], counts, total_cost,
-                          counts.get("duration_ms", 0) or 0, diff_size_kb, logger)
+        #
+        # JAMAIS en mode simulé : les findings sont fabriqués et le coût est nul. Les
+        # enregistrer gonflerait « remarques postées » et le nombre de runs tout en laissant
+        # le coût inchangé — donc un ROI faussé, dans le sens flatteur, par des données qui
+        # ne mesurent rien. Un DRY-RUN, lui, reste comptabilisé : ses findings sont réels.
+        if config.fake:
+            logger.info("PR #%s : mode simulé, statistiques NON enregistrées "
+                        "(findings fabriqués, coût nul)", pr_number)
+        else:
+            enregistrer_stats(pr_number, head_sha, author, project.name,
+                              [s.id for s, _ in outcomes], counts, total_cost,
+                              counts.get("duration_ms", 0) or 0, diff_size_kb, logger)
 
         if not config.dry_run:
             mark_reviewed(pr_number, head_sha, title, status="success")
