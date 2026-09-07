@@ -167,6 +167,8 @@ td.wrap-first:first-child { white-space: normal; }
   <div class="card twrap"><table>
     <tr><th>Je veux…</th><th>Faire</th></tr>
     <tr><td class="wrap-first">Voir ce qui serait posté, sans rien poster</td><td><code>--dry-run</code>, ou <code>DRY_RUN=true</code><br>Chaque finding est affiché : fichier, ligne, confiance, message.</td></tr>
+    <tr><td class="wrap-first">Mettre au point la CI sans payer</td><td><code>REVIEWME_FAKE=1 DRY_RUN=1</code><br>Sélection, prechecks, validation contre le diff, empreintes, dédup, seuil : tout tourne. Seul l'appel au modèle est court-circuité.</td></tr>
+    <tr><td class="wrap-first">Comprendre pourquoi un reviewer ne trouve rien</td><td>Quatre signaux sortent <b>sans rien activer</b> : refus d'outil liés à l'allowlist, arrêt au plafond de tours déguisé en succès, sortie non-JSON de la CLI, réponse hors contrat avec le début du texte écrit.<br><code>REVIEWME_DEBUG=1</code> ajoute l'invocation complète.</td></tr>
     <tr><td class="wrap-first">Moins de commentaires par PR</td><td><code>MAX_COMMENTS_PER_PR=5</code><br>Coupe par PR, tous reviewers confondus. Les plus graves d'abord.</td></tr>
     <tr><td class="wrap-first">Moins de remarques incertaines</td><td><code>CONFIDENCE_THRESHOLD=90</code> (défaut 80)</td></tr>
     <tr><td class="wrap-first">Un modèle moins cher pour un reviewer</td><td><code>model = "…"</code> dans son <code>reviewer.toml</code></td></tr>
@@ -310,6 +312,8 @@ export REVIEWME_CONFIG_HOME=$PWD
     <tr><td>ANTHROPIC_API_KEY</td><td>—</td><td>Auth Claude en session non interactive (VPS/CI)</td></tr>
     <tr><td>WEBHOOK_SECRET</td><td>—</td><td><b>Obligatoire</b> pour le webhook (HMAC) — fail-closed sinon</td></tr>
     <tr><td>DRY_RUN</td><td><code>false</code></td><td><code>true</code> = ne poste rien, log seulement</td></tr>
+    <tr><td>REVIEWME_FAKE</td><td><code>false</code></td><td><code>true</code> = <b>aucun appel au LLM</b>. Toute la chaîne tourne ; les findings sont fabriqués sur de vraies lignes du diff. Coût nul, et le run n'entre pas dans les statistiques.</td></tr>
+    <tr><td>REVIEWME_DEBUG</td><td><code>false</code></td><td><code>true</code> = journalise l'invocation de la CLI (binaire, modèle, MCP, allowlist) et son enveloppe JSON. Le prompt n'est jamais journalisé, seulement sa taille.</td></tr>
   </table></div>
 
   <div class="warnbox"><span class="chip c-ko">Piège</span> Le <b>défaut du code</b> n'est pas la <b>valeur déployée</b>. Avant de diagnostiquer un comportement, lire le <code>.env</code> réel de l'instance — jamais les défauts de mémoire.</div>

@@ -159,6 +159,8 @@ le reviewer de ses règles.
 | Lancer un reviewer seulement si certains fichiers changent | `[when] paths = ["**/*.strings"]` |
 | Le désactiver sans supprimer son dossier | `enabled = false` |
 | Voir ce qui serait posté, sans rien poster | `--dry-run` |
+| Mettre au point la CI sans payer de LLM | `REVIEWME_FAKE=1 DRY_RUN=1` |
+| Comprendre pourquoi un reviewer ne trouve rien | `REVIEWME_DEBUG=1` |
 | Moins de commentaires | `MAX_COMMENTS_PER_PR=5` |
 | Moins de remarques incertaines | `CONFIDENCE_THRESHOLD=90` |
 | Un modèle moins cher pour un reviewer | `model = "…"` dans son `reviewer.toml` |
@@ -219,6 +221,20 @@ essentielles :
 | `ANTHROPIC_BASE_URL` | Passerelle interne — héritée telle quelle par `claude -p` |
 
 Liste complète et commentée dans [`.env.example`](.env.example).
+
+### Mise au point
+
+`REVIEWME_FAKE=1` remplace le **seul** appel au modèle. Sélection, prechecks, lecture des
+conventions, validation contre le diff, empreintes, dédup, seuil, plafond : tout le reste
+tourne pour de vrai. Les findings sont ancrés sur de vraies lignes ajoutées du diff — sinon
+la validation anti-422 les rejetterait tous et on ne testerait rien. Coût nul, quelques
+secondes, et le run n'entre pas dans les statistiques.
+
+`REVIEWME_DEBUG=1` journalise l'invocation de la CLI et son enveloppe JSON. Quatre signaux
+sortent de toute façon sans rien activer : les refus d'outil liés à l'allowlist, un arrêt au
+plafond de tours déguisé en succès, une sortie non-JSON de la CLI, et une réponse hors
+contrat avec le début de ce que l'agent a écrit. Le prompt n'est jamais journalisé, seulement
+sa taille.
 
 ## Sécurité
 
