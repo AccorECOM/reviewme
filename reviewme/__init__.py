@@ -13,6 +13,7 @@ Modules :
   stats.py         compteurs agrégés, sans contenu (transportables par un cache CI)
   feedback.py      retours des développeurs -> règles attribuées, à relire
   report.py        rapport HTML autonome des statistiques
+  fake.py          mode simulé : toute la chaîne, sans appeler le LLM
   context/         fournisseurs de contexte externe optionnels (jira.py)
   github_auth.py   PAT ou GitHub App (JWT RS256 -> token d'installation renouvelé)
   run.py           run_review(repo, pr, config) : la fonction commune à toutes les entrées
@@ -24,4 +25,4 @@ Modules :
   web/             dashboard (read-only, durci)
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

@@ -49,6 +49,7 @@ class Config:
                                           # ferait reposter tous ses commentaires en double.
     review_all_prs: bool = False          # False = filtre par label ; True = toute PR ouverte
     dry_run: bool = False                 # True = ne poste rien, log seulement
+    fake: bool = False                    # True = aucun appel au LLM (mise au point CI)
 
     @property
     def repo_owner(self) -> str:
@@ -157,4 +158,5 @@ def load_config(*, require_repo: bool = True) -> Config:
         reviewer_id=os.environ.get("REVIEWER_ID", "tech"),
         review_all_prs=_env_bool("REVIEW_ALL_PRS", False),
         dry_run=_env_bool("DRY_RUN", False),
+        fake=_env_bool("REVIEWME_FAKE", False),
     )

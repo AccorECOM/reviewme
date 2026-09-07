@@ -131,6 +131,13 @@ def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
     """
     if spec is None:
         spec = resolve_project(config).reviewers[0]
+
+    # Mode simulé : on court-circuite le SEUL appel au modèle. Tout ce qui suit dans la
+    # chaîne (validation, empreintes, dédup, seuil, posting) tourne pour de vrai.
+    if config.fake:
+        from .fake import review_simulee
+        return review_simulee(spec.id, pr_diff)
+
     # NB : c'est NOTRE code (Python) qui écrit le diff sur disque, pas l'agent.
     diff_file = tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False, encoding="utf-8")
     diff_file.write(pr_diff)
