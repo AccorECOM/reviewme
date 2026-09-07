@@ -28,6 +28,19 @@ intention.
 
 ## Limites techniques connues
 
+**L'historique des statistiques est borné et transitoire.** `stats.json` vit dans un cache de
+CI, plafonne à `MAX_ENTREES = 5000` runs (~1,5 Mo) et tronque les plus anciens sans
+avertissement. Le rapport ne montre par ailleurs que les 30 dernières PR et les 40 derniers
+runs — le board ne peut donc pas exploser, mais la mémoire longue n'existe pas.
+
+À quelques centaines de PR, le sujet n'est pas la taille : c'est qu'on ne peut pas répondre à
+« est-ce que le bot s'améliore ? ». Il n'y a aucune vue temporelle, et les données qui
+permettraient de la construire disparaissent au fil de l'eau. La piste retenue pour une v2 est
+un stockage externe — S3 ou équivalent — qui garde l'historique complet hors du cache, avec un
+rapport agrégé par semaine plutôt que par PR. Vider le cache de CI ne coûterait alors plus que
+les compteurs courants.
+
+
 **Pas d'arrêt net au plafond de coût d'une PR.** Les reviewers tournent en parallèle : au
 moment où le dépassement est constaté, ils ont déjà tourné. Un arrêt réel supposerait une
 exécution séquentielle par priorité.
