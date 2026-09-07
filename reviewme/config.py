@@ -50,6 +50,7 @@ class Config:
     review_all_prs: bool = False          # False = filtre par label ; True = toute PR ouverte
     dry_run: bool = False                 # True = ne poste rien, log seulement
     fake: bool = False                    # True = aucun appel au LLM (mise au point CI)
+    debug: bool = False                   # True = journalise l'invocation et l'enveloppe CLI
 
     @property
     def repo_owner(self) -> str:
@@ -159,4 +160,5 @@ def load_config(*, require_repo: bool = True) -> Config:
         review_all_prs=_env_bool("REVIEW_ALL_PRS", False),
         dry_run=_env_bool("DRY_RUN", False),
         fake=_env_bool("REVIEWME_FAKE", False),
+        debug=_env_bool("REVIEWME_DEBUG", False),
     )

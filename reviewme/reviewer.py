@@ -13,6 +13,7 @@ retombe sur un unique commentaire global, sans jamais crasher.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -22,6 +23,9 @@ from pathlib import Path
 from .config import Config
 from .models import ReviewResult, parse_review_output
 from .projects import ReviewerSpec, load_output_contract, resolve_project
+from .scrub import scrub_text
+
+_log = logging.getLogger("reviewme.reviewer")
 
 # Allowlist VERROUILLÉE (invariant sécurité — jamais de Write, jamais --dangerously-skip-permissions).
 # ⚠️ Risque résiduel connu : git log/show/diff acceptent --output=FICHIER (écriture) et
@@ -169,6 +173,14 @@ def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
         if budget > 0:
             cmd.extend(["--max-budget-usd", str(budget)])
 
+        # Diagnostic d'invocation. Le prompt n'est PAS journalisé (des dizaines de Ko,
+        # et il contient le diff) : seule sa taille l'est. Le reste des arguments dit ce
+        # qu'on a vraiment demandé à la CLI — binaire résolu, modèle, MCP, allowlist.
+        if config.debug:
+            argv = [("<prompt %d octets>" % len(prompt)) if a is prompt else a for a in cmd]
+            _log.info("[%s] invocation : %s", spec.id, " ".join(argv))
+            _log.info("[%s] cwd=%s", spec.id, config.repo_path)
+
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=_TIMEOUT_S, cwd=config.repo_path,
         )
@@ -202,17 +214,50 @@ def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
                     "cache_read_tokens": cache_read,
                     "cache_create_tokens": cache_create,
                 }
+                # Champs de l'enveloppe qu'on ne gardait pas et qui disent si le run
+                # s'est REELLEMENT bien passé. `subtype` distingue un succès d'un arrêt
+                # au plafond de tours ; `permission_denials` liste les outils que l'agent
+                # a tenté d'utiliser sans y avoir droit — le symptôme d'une allowlist
+                # trop étroite, invisible autrement.
+                refus = data.get("permission_denials") or []
+                if data.get("is_error") or data.get("subtype") not in (None, "success"):
+                    _log.warning("[%s] la CLI signale un problème : is_error=%s subtype=%s "
+                                 "tours=%s", spec.id, data.get("is_error"),
+                                 data.get("subtype"), data.get("num_turns"))
+                if refus:
+                    outils = sorted({str(d.get("tool_name", d)) for d in refus}) \
+                        if isinstance(refus, list) else [str(refus)]
+                    _log.warning("[%s] %d refus d'outil (allowlist) : %s",
+                                 spec.id, len(refus), ", ".join(outils)[:200])
+                if config.debug:
+                    _log.info("[%s] enveloppe : %s", spec.id,
+                              {k: v for k, v in data.items()
+                               if k not in ("result", "usage", "modelUsage")})
             except json.JSONDecodeError:
                 # pas d'enveloppe JSON : on n'exploite la sortie brute que si le run a réussi
+                _log.warning("[%s] sortie non-JSON de la CLI (returncode=%s) : %s",
+                             spec.id, result.returncode, scrub_text(stdout[:300]))
                 agent_text = stdout if result.returncode == 0 else ""
+
+        stderr = scrub_text(result.stderr.strip())
+        if stderr and (config.debug or result.returncode != 0):
+            _log.warning("[%s] stderr (returncode=%s) : %s", spec.id, result.returncode,
+                         stderr[:1000])
 
         if not agent_text:
             raise RuntimeError(
                 f"claude returncode={result.returncode}, aucune sortie exploitable : "
-                f"{result.stderr.strip()[:500]}"
+                f"{stderr[:500]}"
             )
 
-        return parse_review_output(agent_text, metadata)
+        resultat = parse_review_output(agent_text, metadata)
+        if not resultat.parsed_ok:
+            # Le cas le plus opaque : l'agent a répondu, mais hors du contrat de sortie.
+            # Sans cet extrait, on ne voit que « parsed=False, fallback » et on ne peut
+            # rien en conclure.
+            _log.warning("[%s] réponse hors contrat (ni JSON de findings) — début de ce "
+                         "qu'a écrit l'agent : %s", spec.id, scrub_text(agent_text[:400]))
+        return resultat
 
     finally:
         Path(diff_path).unlink(missing_ok=True)
