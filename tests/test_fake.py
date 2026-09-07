@@ -15,6 +15,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from reviewme.fake import _lignes_ajoutees, review_simulee  # noqa: E402
+from reviewme.models import Severity  # noqa: E402
+from reviewme.reconciler import _SEV_LABEL, _SEV_RANK  # noqa: E402
 
 DIFF = """diff --git a/src/App.swift b/src/App.swift
 index 1111111..2222222 100644
@@ -77,6 +79,18 @@ def test_reviewers_ancrent_a_des_endroits_differents():
     distincts = len({frozenset(v) for v in ancres.values()})
     verifie("test_reviewers_ancrent_a_des_endroits_differents", distincts > 1,
             f"{distincts} jeu(x) d'ancrage distinct(s) pour 4 reviewers")
+
+
+def test_severites_sont_l_enum_et_se_rendent_distinctement():
+    """Une chaine libre retomberait sur [MINOR] pour les trois, sans rien signaler."""
+    findings = review_simulee("tech", DIFF).findings
+    sev = [f.severity for f in findings]
+    labels = [_SEV_LABEL.get(f.severity, "[DEFAUT]") for f in findings]
+    verifie("test_severites_sont_l_enum_et_se_rendent_distinctement",
+            all(isinstance(s, Severity) for s in sev)
+            and all(s in _SEV_RANK for s in sev)
+            and len(set(labels)) == len(labels),
+            f"severites {sev}, rendus {labels}")
 
 
 def test_aucun_cout_et_metadata_marquee():

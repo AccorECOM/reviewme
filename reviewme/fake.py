@@ -20,17 +20,21 @@ from __future__ import annotations
 import re
 from typing import Iterator
 
-from .models import Finding, ReviewResult
+from .models import Finding, ReviewResult, Severity
 
 _ENTETE_FICHIER = re.compile(r"^\+\+\+ b/(.+)$")
 _ENTETE_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 # Trois niveaux qui encadrent le seuil par défaut (70) : on veut voir le filtrage
 # à l'œuvre, pas seulement le chemin nominal.
+#
+# La sévérité est l'ENUM, pas une chaîne libre : `_SEV_LABEL` et `_SEV_RANK` sont indexés
+# par les membres de Severity. Une chaîne brute retomberait silencieusement sur [MINOR]
+# pour les trois, et le tri par sévérité — qui pilote le plafonnement — ne testerait rien.
 _GABARITS = (
-    (95, "error", "Finding simulé à confiance haute : doit être posté."),
-    (75, "warning", "Finding simulé juste au-dessus du seuil : doit être posté."),
-    (40, "info", "Finding simulé sous le seuil : doit être écarté (`dropped_low`)."),
+    (95, Severity.BLOCKER, "Finding simulé à confiance haute : doit être posté."),
+    (75, Severity.IMPORTANT, "Finding simulé juste au-dessus du seuil : doit être posté."),
+    (40, Severity.MINOR, "Finding simulé sous le seuil : doit être écarté (`dropped_low`)."),
 )
 
 
