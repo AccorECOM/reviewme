@@ -133,6 +133,16 @@ Reviewer templates shipped with the skeleton, to copy and adapt:
 | `i18n` | missing or doubtful translations | inline and summary |
 | `conseil` | what a human must check themselves on this PR | one comment, silent when nothing applies |
 
+**Use them without copying** them, from `project.toml`: they then follow engine updates.
+A `reviewers/<id>/` folder with the same name takes precedence, for a project-specific
+version. Removing an id from the list disables it.
+
+```toml
+# .reviewme/projects/shop/project.toml
+[reviewers]
+core = ["tech", "conseil"]
+```
+
 In CI: a GitHub Actions example lives in [`deploy/github-actions/`](deploy/github-actions/),
 a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 

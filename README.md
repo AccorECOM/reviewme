@@ -134,6 +134,16 @@ Relecteurs types fournis par le squelette, à copier puis adapter :
 | `i18n` | traductions manquantes ou douteuses | en ligne et résumé |
 | `conseil` | ce qu'un humain doit valider lui-même sur cette PR | un commentaire, muet si rien d'applicable |
 
+**Les utiliser sans les copier**, dans `project.toml` : ils suivent alors les évolutions du
+moteur. Un dossier `reviewers/<id>/` du même nom prend le dessus, pour une version propre
+au projet. Retirer un id de la liste le désactive.
+
+```toml
+# .reviewme/projects/boutique/project.toml
+[reviewers]
+core = ["tech", "conseil"]
+```
+
 En CI : un exemple GitHub Actions est dans [`deploy/github-actions/`](deploy/github-actions/),
 un exemple Bitrise dans [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 

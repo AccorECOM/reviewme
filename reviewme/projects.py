@@ -254,37 +254,51 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
             f"projet '{name}' introuvable dans {root}"
             + (f" (disponibles : {', '.join(available)})" if available else ""))
 
-    # Les reviewers sont les DOSSIERS de `reviewers/` — pas une liste à tenir à jour ailleurs.
-    # Un manifeste séparé serait une seconde source de vérité : y oublier un dossier le rendrait
-    # silencieusement inactif. Pour mettre un reviewer en sommeil sans le supprimer :
-    # `enabled = false` dans son `reviewer.toml`.
+    # Réglages du PROJET (et non d'un reviewer), optionnels.
+    settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
+    ledger = settings.get("ledger", {}) or {}
+
+    # Deux sources de reviewers :
+    # - les DOSSIERS de `reviewers/` : les reviewers propres au projet. Pas de liste à tenir
+    #   à jour ailleurs : y oublier un dossier le rendrait silencieusement inactif ;
+    # - `[reviewers] core = [...]` du project.toml : des reviewers du CORE, utilisés tels
+    #   quels depuis `config/templates/reviewers/`, sans copie. Ils suivent les évolutions du
+    #   moteur. Un dossier local du même nom prime (le projet a voulu sa propre version).
+    # Mettre en sommeil : `enabled = false` dans le reviewer.toml local, ou retirer l'id de
+    # la liste `core`.
+    core_ids = (settings.get("reviewers", {}) or {}).get("core", []) or []
+    if not isinstance(core_ids, list):
+        raise ProjectConfigError(f"projet '{name}' : `[reviewers] core` doit être une liste")
+    disponibles = sorted(d.name for d in (TEMPLATES_DIR / "reviewers").iterdir()
+                         if d.is_dir()) if (TEMPLATES_DIR / "reviewers").is_dir() else []
+    inconnus = [r for r in core_ids if r not in disponibles]
+    if inconnus:
+        raise ProjectConfigError(
+            f"projet '{name}' : reviewer(s) du core inconnu(s) {inconnus} "
+            f"(disponibles : {', '.join(disponibles)})")
+
     rroot = pdir / "reviewers"
-    if not rroot.is_dir():
+    local_ids = sorted(d.name for d in rroot.iterdir()
+                       if d.is_dir() and not d.name.startswith(".")) if rroot.is_dir() else []
+    if not local_ids and not core_ids:
         # Un dossier de projet totalement vide = submodule git non initialisé neuf fois sur
-        # dix. Le dire, sinon le message parle d'un `reviewers/` manquant et envoie chercher
-        # au mauvais endroit.
+        # dix. Le dire, sinon le message envoie chercher au mauvais endroit.
         if not any(pdir.iterdir()):
             raise ProjectConfigError(
                 f"projet '{name}' : dossier vide ({pdir}). S'il s'agit d'un submodule git, "
                 f"l'initialiser : `git submodule update --init --recursive`")
-        raise ProjectConfigError(f"projet '{name}' : dossier `reviewers/` manquant dans {pdir}")
-
-    ids = sorted(d.name for d in rroot.iterdir() if d.is_dir() and not d.name.startswith("."))
-    if not ids:
         raise ProjectConfigError(
-            f"projet '{name}' : aucun reviewer dans {rroot} "
-            f"(un sous-dossier par reviewer, ex. `reviewers/tech/`)")
+            f"projet '{name}' : aucun reviewer (un sous-dossier de `reviewers/`, ex. "
+            f"`reviewers/tech/`, ou `[reviewers] core = [\"tech\"]` dans project.toml)")
 
     common = _load_common(pdir)
-    specs = tuple(_load_reviewer(name, pdir, rid, common) for rid in ids)
+    specs = [_load_reviewer(name, pdir, rid, common) for rid in local_ids]
+    specs += [_load_reviewer(name, TEMPLATES_DIR, rid, common)
+              for rid in core_ids if rid not in local_ids]
     active = tuple(s for s in specs if s.enabled)
     if not active:
         raise ProjectConfigError(
             f"projet '{name}' : tous les reviewers sont désactivés (`enabled = false`)")
-
-    # Réglages du PROJET (et non d'un reviewer), optionnels.
-    settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
-    ledger = settings.get("ledger", {}) or {}
 
     return ProjectConfig(name=name, directory=pdir, reviewers=active,
                          ledger_include_text=bool(ledger.get("include_text", False)))

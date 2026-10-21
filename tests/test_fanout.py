@@ -798,7 +798,7 @@ def test_chargement_projet_et_erreurs_explicites():
 
             (root / "sans-dossier-reviewers").mkdir()
             (root / "sans-dossier-reviewers" / "common").mkdir()
-            _expect_error(load_project, "sans-dossier-reviewers", "`reviewers/` manquant")
+            _expect_error(load_project, "sans-dossier-reviewers", "aucun reviewer")
 
             # dossier vide = submodule git non initialisé : le message doit le dire
             (root / "submodule-vide").mkdir()

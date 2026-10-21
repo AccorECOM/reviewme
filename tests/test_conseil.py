@@ -98,3 +98,29 @@ def test_silencieux_mais_pas_muet_sur_un_conseil():
     prep = prepare(PR, _config(), _ctx(), result, LOGGER, "conseil", output_mode="global",
                    silent_when_clean=True, advice=True)
     assert prep.global_body and "CA2 à tester" in prep.global_body
+
+
+def test_reviewers_du_core_actives_par_project_toml():
+    import tempfile
+    from pathlib import Path
+
+    import pytest
+
+    from reviewme.projects import ProjectConfigError, load_project
+    with tempfile.TemporaryDirectory() as tmp:
+        pdir = Path(tmp) / "boutique"
+        pdir.mkdir()
+        (pdir / "project.toml").write_text('[reviewers]\ncore = ["tech", "conseil"]\n')
+        ids = sorted(s.id for s in load_project("boutique", Path(tmp)).reviewers)
+        assert ids == ["conseil", "tech"]
+
+        # Un dossier local du même nom prime sur le reviewer du core.
+        local = pdir / "reviewers" / "tech"
+        local.mkdir(parents=True)
+        (local / "system.md").write_text("persona locale")
+        tech = next(s for s in load_project("boutique", Path(tmp)).reviewers if s.id == "tech")
+        assert tech.system_prompt == "persona locale"
+
+        (pdir / "project.toml").write_text('[reviewers]\ncore = ["inexistant"]\n')
+        with pytest.raises(ProjectConfigError):
+            load_project("boutique", Path(tmp))
