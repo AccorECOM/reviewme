@@ -130,7 +130,8 @@ def _comment_body(finding, marker: str, prefix: str = "") -> str:
 def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
                   title: str = "Tech Lead Review (automatisée)", *,
                   retained: list | None = None, unverified: int = 0,
-                  minor: list | None = None, preexisting: list | None = None) -> str:
+                  minor: list | None = None, preexisting: list | None = None,
+                  advice: list | None = None) -> str:
     """Corps du résumé. `retained` : findings listés (mode global, où ils n'ont pas de
     commentaire inline). `unverified` : findings écartés par la vérification.
 
@@ -149,6 +150,12 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
         for f in retained:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} "
                          f"{_scrub(f.message)}")
+    if advice:
+        # Pas des défauts : ce qu'un humain doit valider lui-même sur CETTE PR.
+        parts.append("\n**💡 Conseil pour la relecture** (à valider par un humain) :")
+        for a in advice:
+            ou = ", ".join(f"`{_scrub(p)}`" for p in a.paths)
+            parts.append(f"- **{_scrub(a.topic)}** — {_scrub(a.why)}" + (f" ({ou})" if ou else ""))
     if minor:
         parts.append("\n**Remarques mineures** :")
         for f in minor:
@@ -232,7 +239,7 @@ class PreparedReview:
 def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             logger: logging.Logger, reviewer_id: str, *,
             output_mode: str = "inline", prefix: str = "",
-            silent_when_clean: bool = False) -> PreparedReview:
+            silent_when_clean: bool = False, advice: bool = True) -> PreparedReview:
     """Calcule ce qu'il faudrait poster pour UN reviewer. Sans effet de bord réseau."""
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]
@@ -311,11 +318,22 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         inline = kept
         counts["in_summary"] = len(minor) + len(preexisting)
 
+    # --- Conseils au relecteur humain : seulement s'ils portent sur des fichiers de la PR.
+    # Un conseil sans ancrage dans la PR est du générique (« bien tester ») : écarté.
+    conseils = []
+    if advice:
+        for a in getattr(result, "advice", []) or []:
+            a.paths = [p for p in a.paths if p in ctx.valid]
+            if a.paths:
+                conseils.append(a)
+    counts["advice"] = len(conseils)
+
     title = f"Review automatisée — {reviewer_id}" if prefix else "Tech Lead Review (automatisée)"
     prep.summary = _guard(_summary_body(
         result, out_of_diff, head_sha, title,
         retained=inline if output_mode == "global" else None,
-        unverified=counts["dropped_unverified"], minor=minor, preexisting=preexisting),
+        unverified=counts["dropped_unverified"], minor=minor, preexisting=preexisting,
+        advice=conseils),
         logger, pr_number)
 
     # --- Mode `global` : un unique commentaire, mis à jour de commit en commit ---
@@ -325,7 +343,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         # « Silence is better than noise » : rien à dire et rien de posté jusqu'ici ->
         # aucun commentaire. Un commentaire déjà posté est mis à jour, lui, pour ne pas
         # laisser en place des remarques qui ne valent plus.
-        if silent_when_clean and not inline and not out_of_diff and existing is None:
+        if silent_when_clean and not inline and not out_of_diff and not conseils \
+                and existing is None:
             logger.info("PR #%s [%s] : rien à signaler, aucun commentaire (silent_when_clean)",
                         pr_number, reviewer_id)
             return prep
@@ -463,7 +482,7 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
     summary_body = "\n\n---\n\n".join(inline_summaries) if inline_summaries else ""
     # Remarques à délivrer par le seul résumé (hors-diff, mineures, préexistantes).
     out_of_diff_only = any(p.counts.get("out_of_diff") or p.counts.get("in_summary")
-                           for p in prepared)
+                           or p.counts.get("advice") for p in prepared)
 
     if config.dry_run:
         # En dry-run, AFFICHER ce qui serait posté : c'est tout l'intérêt du mode, sans quoi

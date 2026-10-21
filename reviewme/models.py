@@ -68,6 +68,18 @@ class Finding:
 
 
 @dataclass
+class Advice:
+    """Point d'attention pour le relecteur HUMAIN : pas un défaut, une validation à faire."""
+    topic: str
+    why: str
+    paths: list[str] = field(default_factory=list)
+
+
+#: Au-delà, ce n'est plus un conseil ciblé mais une liste de contrôle générique.
+MAX_ADVICE = 3
+
+
+@dataclass
 class ReviewResult:
     status: str                    # v1 : toujours "COMMENT"
     summary: str
@@ -76,6 +88,7 @@ class ReviewResult:
     metadata: dict = field(default_factory=dict)
     parsed_ok: bool = True         # False -> l'appelant doit fallback en commentaire global
     invalid: int = 0               # findings rejetés au parsing (sans `path`/`line` exploitable)
+    advice: list[Advice] = field(default_factory=list)  # conseils au relecteur humain
 
 
 def _extract_json_blob(text: str) -> str | None:
@@ -143,12 +156,30 @@ def parse_review_output(text: str, metadata: dict | None = None) -> ReviewResult
     return ReviewResult(
         status="COMMENT",  # v1 : le bot ne poste jamais APPROVE/REQUEST_CHANGES (évite le 422 self-review)
         summary=str(data.get("summary", "")).strip(),
+        advice=_parse_advice(data.get("advice")),
         findings=findings,
         raw=raw,
         metadata=metadata,
         parsed_ok=True,
         invalid=invalid,
     )
+
+
+def _parse_advice(raw) -> list[Advice]:
+    """Conseils lisibles seulement : sujet et raison non vides, trois au plus."""
+    out: list[Advice] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("topic", "") or "").strip()
+        why = str(item.get("why", "") or "").strip()
+        paths = item.get("paths") or []
+        if isinstance(paths, str):
+            paths = [paths]
+        if topic and why:
+            out.append(Advice(topic=topic[:200], why=why[:600],
+                              paths=[str(p).strip() for p in paths if str(p).strip()][:5]))
+    return out[:MAX_ADVICE]
 
 
 def _coerce_int(value, default: int = 0) -> int:

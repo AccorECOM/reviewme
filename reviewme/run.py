@@ -350,7 +350,8 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
             prepare(pr, config, ctx, result, logger, spec.id,
                     output_mode=spec.output_mode,
                     prefix=f"[{spec.id.upper()}]" if multi else "",
-                    silent_when_clean=spec.silent_when_clean)
+                    silent_when_clean=spec.silent_when_clean,
+                    advice=spec.advice and not config.baseline)
             for spec, result in outcomes
         ]
         # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après

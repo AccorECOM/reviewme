@@ -63,6 +63,8 @@ paths = ["src/api/**", "src/auth/**"]
 
 [context]                              # read from the reviewed repo, never copied here
 read = ["docs/security.md"]
+
+# advice = false                       # no "review tip" from this reviewer
 ```
 
 ```markdown
@@ -137,6 +139,7 @@ a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 | on code the PR only **moved** | summary, tagged | not a defect of this PR |
 | outside the diff lines | summary | GitHub rejects comments outside the diff |
 | not confirmed by verification | nowhere (ledger) | a false positive costs the team's trust |
+| **💡 Review tip**: something a human must check themselves (call order changed, file placed outside its usual folder…) | summary | only when it applies, anchored in files of the PR; 3 at most |
 | clean PR | nothing | silence beats a "LGTM" |
 
 The bot only posts comments: never an approval or a change request.

@@ -64,6 +64,8 @@ paths = ["src/api/**", "src/auth/**"]
 
 [context]                              # lus dans le dépôt relu, jamais recopiés ici
 read = ["docs/securite.md"]
+
+# advice = false                       # pas de « Conseil pour la relecture » pour lui
 ```
 
 ```markdown
@@ -138,6 +140,7 @@ un exemple Bitrise dans [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 | sur du code seulement **déplacé** par la PR | résumé, tagué | ce n'est pas un défaut de la PR |
 | hors des lignes du diff | résumé | GitHub refuse un commentaire hors diff |
 | non confirmée par la vérification | nulle part (registre) | un faux positif coûte la confiance de l'équipe |
+| **💡 Conseil pour la relecture** : un point qu'un humain doit valider lui-même (ordre d'appels modifié, fichier rangé hors de son dossier habituel…) | résumé | seulement s'il est applicable, ancré dans des fichiers de la PR ; 3 au plus |
 | PR propre | rien | le silence vaut mieux qu'un « RAS » |
 
 Le bot ne poste que des commentaires : jamais d'approbation ni de demande de changement.
