@@ -40,7 +40,70 @@ flowchart LR
     Config --> Engine --> PR[(Pull Request)]
 ```
 
-A reviewer is **one folder** with two files:
+A project combines two kinds of reviewers, enabled in different ways:
+
+| | Core reviewer | Custom reviewer |
+|---|---|---|
+| Defined | in the engine | in your repository, `reviewers/<name>/` |
+| How to enable | its name in `core = [...]` in `project.toml` | its folder exists: nothing else to declare |
+| How to disable | remove its name from the list | `enabled = false` in its `reviewer.toml` |
+| Updates | follows the engine | yours |
+
+Full example of a project using both:
+
+```text
+.reviewme/projects/shop/
+├── project.toml              [reviewers] core = ["tech", "conseil"]
+└── reviewers/
+    └── security/             custom reviewer, active because the folder exists
+        ├── reviewer.toml
+        └── system.md
+```
+
+Three reviewers run on its PRs: `tech` and `conseil` (core), `security` (custom).
+
+### Core reviewers: enable them by name
+
+Shipped with the engine (`config/templates/reviewers/`), they follow its updates. Enable
+them in the project's `project.toml`; removing a name disables it.
+
+```toml
+# .reviewme/projects/shop/project.toml
+[reviewers]
+core = ["tech", "conseil"]
+```
+
+| Name | Role | Output | Requires |
+|---|---|---|---|
+| `tech` | bugs, logic, security, repository conventions | inline | — |
+| `us` | are the ticket's acceptance criteria covered? | one comment, silent when all are covered | Jira (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`) |
+| `i18n` | missing or doubtful translations | inline and summary | translation files in the PR (`*.strings`, `values*/strings.xml`…) |
+| `conseil` | what a human must check themselves on this PR | one comment, silent when nothing applies | — |
+
+**Adapt them without copying**: the project can tell a core reviewer where its docs
+are, when to run and what it should know. Everything else (method, output, verification)
+stays the engine's.
+
+```toml
+[reviewers.tech]
+read = ["Documentation/ARCHITECTURE.md", "Documentation/"]   # added to what it reads
+paths = ["src/**"]                                            # when it runs
+instructions = "Business services live in src/services; no network calls from views."
+# model = "…"   max_turns = 50   priority = 10   enabled = false
+```
+
+**Let an AI do it**: the [`skills/reviewme-creer-relecteur`](skills/reviewme-creer-relecteur/SKILL.md)
+skill (French) guides Claude Code to explore the repository, choose between adapting a
+core reviewer and creating one, write a short persona and validate the config. Copy it into
+the project's `.claude/skills/`, then ask for instance "add a reviewer that checks our
+migrations".
+
+### Custom reviewers: a folder in the project
+
+For what is specific to **your** code, a reviewer is a folder under
+`.reviewme/projects/<project>/reviewers/<name>/`, in the reviewed repository (or in a
+separate config repository, via `REVIEWME_CONFIG_HOME`). The name is free; a folder named
+after a core reviewer replaces it for that project.
 
 ```text
 .reviewme/projects/shop/
@@ -63,6 +126,7 @@ paths = ["src/api/**", "src/auth/**"]
 
 [context]                              # read from the reviewed repo, never copied here
 read = ["docs/security.md"]
+
 ```
 
 ```markdown
@@ -116,12 +180,16 @@ uv run reviewme review --repo my-org/my-app --pr 123 --dry-run
 ```
 
 `--dry-run` computes everything and prints what **would** be posted, without writing to
-GitHub. Without `PROJECT`, a single generic reviewer runs (simple mode). To create your
-own reviewers:
+GitHub. Without `PROJECT`, a single generic reviewer runs (simple mode). For a real project, the
+shortest path is a `project.toml` enabling core reviewers (see above):
 
 ```sh
-REVIEWME_CONFIG_HOME=$PWD/.reviewme uv run reviewme init-project my-app --reviewers tech,i18n
+mkdir -p .reviewme/projects/my-app
+printf '[reviewers]\ncore = ["tech", "conseil"]\n' > .reviewme/projects/my-app/project.toml
+REVIEWME_CONFIG_HOME=$PWD/.reviewme PROJECT=my-app uv run reviewme projects
 ```
+
+To start from an editable copy of a core reviewer: `reviewme init-project my-app --reviewers tech`.
 
 In CI: a GitHub Actions example lives in [`deploy/github-actions/`](deploy/github-actions/),
 a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
@@ -137,6 +205,7 @@ a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 | on code the PR only **moved** | summary, tagged | not a defect of this PR |
 | outside the diff lines | summary | GitHub rejects comments outside the diff |
 | not confirmed by verification | nowhere (ledger) | a false positive costs the team's trust |
+| **💡 Review tip** (`conseil` reviewer): something a human must check themselves (call order changed, file placed outside its usual folder…) | one comment | only when it applies, anchored in files of the PR; 3 at most |
 | clean PR | nothing | silence beats a "LGTM" |
 
 The bot only posts comments: never an approval or a change request.

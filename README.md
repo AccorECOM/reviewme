@@ -41,7 +41,69 @@ flowchart LR
     Config --> Moteur --> PR[(Pull Request)]
 ```
 
-Un relecteur, c'est **un dossier** et deux fichiers :
+Un projet combine deux sortes de relecteurs, qui s'activent différemment :
+
+| | Relecteur du core | Relecteur custom |
+|---|---|---|
+| Où il est défini | dans le moteur | dans votre dépôt, `reviewers/<nom>/` |
+| Comment l'activer | son nom dans `core = [...]` du `project.toml` | son dossier existe : rien d'autre à déclarer |
+| Comment le couper | retirer son nom de la liste | `enabled = false` dans son `reviewer.toml` |
+| Mises à jour | suit le moteur | les vôtres |
+
+Exemple complet d'un projet qui utilise les deux :
+
+```text
+.reviewme/projects/boutique/
+├── project.toml              [reviewers] core = ["tech", "conseil"]
+└── reviewers/
+    └── securite/             relecteur custom, actif parce que le dossier existe
+        ├── reviewer.toml
+        └── system.md
+```
+
+Trois relecteurs tournent sur ses PR : `tech` et `conseil` (core), `securite` (custom).
+
+### Relecteurs du core : à activer par leur nom
+
+Fournis par le moteur (`config/templates/reviewers/`), ils suivent ses mises à jour. On les
+active dans le `project.toml` du projet ; retirer un nom les désactive.
+
+```toml
+# .reviewme/projects/boutique/project.toml
+[reviewers]
+core = ["tech", "conseil"]
+```
+
+| Nom | Rôle | Sortie | Prérequis |
+|---|---|---|---|
+| `tech` | bugs, logique, sécurité, conventions du dépôt | en ligne | — |
+| `us` | les critères d'acceptation du ticket sont-ils couverts ? | un commentaire, muet si tout est couvert | Jira (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`) |
+| `i18n` | traductions manquantes ou douteuses | en ligne et résumé | fichiers de traduction dans la PR (`*.strings`, `values*/strings.xml`…) |
+| `conseil` | ce qu'un humain doit valider lui-même sur cette PR | un commentaire, muet si rien d'applicable | — |
+
+**Les adapter sans les copier** : le projet peut indiquer à un relecteur du core où est
+sa doc, quand tourner et ce qu'il doit savoir. Le reste (méthode, sortie, vérification)
+reste celui du moteur.
+
+```toml
+[reviewers.tech]
+read = ["Documentation/ARCHITECTURE.md", "Documentation/"]   # ajouté à sa lecture
+paths = ["src/**"]                                            # quand il tourne
+instructions = "Les services métier sont dans src/services ; pas d'appel réseau dans les vues."
+# model = "…"   max_turns = 50   priority = 10   enabled = false
+```
+
+**Laisser une IA le faire** : le skill [`skills/reviewme-creer-relecteur`](skills/reviewme-creer-relecteur/SKILL.md)
+guide Claude Code pour explorer le dépôt, choisir entre adapter un relecteur du core et en
+créer un, écrire une persona courte et valider la config. Copiez-le dans `.claude/skills/`
+du projet, puis demandez par exemple « ajoute un relecteur qui vérifie nos migrations ».
+
+### Relecteurs custom : un dossier dans le projet
+
+Pour ce qui est propre à **votre** code, un relecteur est un dossier sous
+`.reviewme/projects/<projet>/reviewers/<nom>/`, dans le dépôt relu (ou dans un dépôt de
+config à part, via `REVIEWME_CONFIG_HOME`). Son nom est libre ; un dossier qui porte le nom
+d'un relecteur du core le remplace pour ce projet.
 
 ```text
 .reviewme/projects/boutique/
@@ -64,6 +126,7 @@ paths = ["src/api/**", "src/auth/**"]
 
 [context]                              # lus dans le dépôt relu, jamais recopiés ici
 read = ["docs/securite.md"]
+
 ```
 
 ```markdown
@@ -117,12 +180,17 @@ uv run reviewme review --repo mon-org/mon-app --pr 123 --dry-run
 ```
 
 `--dry-run` calcule tout et affiche ce qui **serait** posté, sans rien écrire sur GitHub.
-Sans `PROJECT`, un seul relecteur générique tourne (mode simple). Pour créer ses
-relecteurs :
+Sans `PROJECT`, un seul relecteur générique tourne (mode simple). Pour un vrai projet, le
+plus court est un `project.toml` qui active des relecteurs du core (voir plus haut) :
 
 ```sh
-REVIEWME_CONFIG_HOME=$PWD/.reviewme uv run reviewme init-project mon-app --reviewers tech,i18n
+mkdir -p .reviewme/projects/mon-app
+printf '[reviewers]\ncore = ["tech", "conseil"]\n' > .reviewme/projects/mon-app/project.toml
+REVIEWME_CONFIG_HOME=$PWD/.reviewme PROJECT=mon-app uv run reviewme projects
 ```
+
+Pour partir d'une copie modifiable d'un relecteur du core :
+`reviewme init-project mon-app --reviewers tech`.
 
 En CI : un exemple GitHub Actions est dans [`deploy/github-actions/`](deploy/github-actions/),
 un exemple Bitrise dans [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
@@ -138,6 +206,7 @@ un exemple Bitrise dans [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 | sur du code seulement **déplacé** par la PR | résumé, tagué | ce n'est pas un défaut de la PR |
 | hors des lignes du diff | résumé | GitHub refuse un commentaire hors diff |
 | non confirmée par la vérification | nulle part (registre) | un faux positif coûte la confiance de l'équipe |
+| **💡 Conseil pour la relecture** (relecteur `conseil`) : un point qu'un humain doit valider lui-même (ordre d'appels modifié, fichier rangé hors de son dossier habituel…) | un commentaire | seulement s'il est applicable, ancré dans des fichiers de la PR ; 3 au plus |
 | PR propre | rien | le silence vaut mieux qu'un « RAS » |
 
 Le bot ne poste que des commentaires : jamais d'approbation ni de demande de changement.

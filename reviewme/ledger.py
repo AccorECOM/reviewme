@@ -209,7 +209,7 @@ def finding_rows(base: dict, reviewer: str, result, findings: list, *,
 
 
 def run_row(base: dict, reviewer: str, result, *, threshold: int, diff_files: int,
-            diff_lines: int, fates: dict) -> dict:
+            diff_lines: int, fates: dict, advice_count: int = 0) -> dict:
     m = result.metadata
     return {
         **base,
@@ -233,6 +233,8 @@ def run_row(base: dict, reviewer: str, result, *, threshold: int, diff_files: in
         "threshold": threshold,
         "findings": len(result.findings) + (getattr(result, "invalid", 0) or 0),
         "fates": fates,
+        # Conseils au relecteur humain réellement affichés (ancrés dans la PR).
+        "advice": advice_count,
     }
 
 
@@ -301,8 +303,12 @@ def record(pr: dict, config: Config, project, prepared: list, outcomes: list, di
             for r in rows:
                 fates[r["fate"]] = fates.get(r["fate"], 0) + 1
             f_rows.extend(rows)
-            r_rows.append(run_row(base, spec.id, result, threshold=config.confidence_threshold,
-                                  diff_files=files, diff_lines=lines, fates=fates))
+            r_row = run_row(base, spec.id, result, threshold=config.confidence_threshold,
+                            diff_files=files, diff_lines=lines, fates=fates,
+                            advice_count=prep.counts.get("advice", 0))
+            if with_text and prep.counts.get("advice"):
+                r_row["advice_topics"] = [a.topic for a in result.advice if a.paths]
+            r_rows.append(r_row)
         write_part(root, FINDINGS_FILE, f_rows, run_id)
         write_part(root, RUNS_FILE, r_rows, run_id)
         logger.info("PR #%s : registre %s — %d finding(s), %d run(s) reviewer (%s)",

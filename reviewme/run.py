@@ -107,6 +107,12 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
 
     result = run_reviewer(pr_number, title, diff, config, spec=spec, extra_context=extra)
     result.metadata["context_files"] = sources
+    if not spec.findings and result.findings:
+        # Relecteur sans remarques (ex. `conseil`) : ce qu'il a produit malgré la consigne
+        # n'est ni vérifié ni posté.
+        logger.info("[%s] %d finding(s) ignoré(s) : `findings = false`", spec.id,
+                    len(result.findings))
+        result.findings = []
 
     # Passe de vérification (cf. `verify.py`) : seuls les findings au-dessus du seuil, les
     # autres sont déjà écartés. Son coût s'ajoute à celui du reviewer.
@@ -350,7 +356,10 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
             prepare(pr, config, ctx, result, logger, spec.id,
                     output_mode=spec.output_mode,
                     prefix=f"[{spec.id.upper()}]" if multi else "",
-                    silent_when_clean=spec.silent_when_clean)
+                    silent_when_clean=spec.silent_when_clean,
+                    # Seul un relecteur de conseils (`findings = false`) affiche des
+                    # conseils : ailleurs, ils feraient doublon avec lui.
+                    advice=not spec.findings and not config.baseline)
             for spec, result in outcomes
         ]
         # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après

@@ -61,6 +61,7 @@ projet a activé `[ledger] include_text = true` (dans `project.toml`) ou
 | `verification` | Bilan de la passe de vérification, ou `null` |
 | `threshold` | Seuil de confiance appliqué |
 | `findings`, `fates` | Nombre de findings et répartition par sort |
+| `advice`, `advice_topics` | Conseils pour la relecture affichés (ancrés dans la PR) ; leurs sujets seulement avec `include_text` |
 
 ## `enrich.jsonl` — devenir d'une remarque postée (`reviewme enrich`)
 

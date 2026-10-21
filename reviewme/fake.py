@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from typing import Iterator
 
-from .models import Finding, ReviewResult, Severity
+from .models import Advice, Finding, ReviewResult, Severity
 
 _ENTETE_FICHIER = re.compile(r"^\+\+\+ b/(.+)$")
 _ENTETE_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -87,6 +87,11 @@ def review_simulee(reviewer_id: str, diff: str) -> ReviewResult:
                  f"(`REVIEWME_FAKE`). {len(findings)} finding(s) fabriqué(s) sur "
                  f"{len(candidates)} ligne(s) ajoutée(s) du diff."),
         findings=findings,
+        # Un conseil ancré sur un vrai fichier du diff : la section « Conseil pour la
+        # relecture » doit apparaître dans le résumé simulé.
+        advice=[Advice(topic=f"[SIMULÉ · {reviewer_id}] Point à valider par un humain",
+                       why="Conseil fabriqué pour tester l'affichage.",
+                       paths=[candidates[0][0]])] if candidates else [],
         raw="",
         metadata={"model": "simulé", "cost_usd": 0.0, "duration_ms": 0,
                   "input_tokens": 0, "output_tokens": 0, "fake": True},

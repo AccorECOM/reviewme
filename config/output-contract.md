@@ -18,6 +18,13 @@ pas de fence ```). Structure :
       "confidence": 0,
       "evidence": "ce que tu as constaté et où : fichier:ligne, résultat d'un grep, commit"
     }
+  ],
+  "advice": [
+    {
+      "topic": "Ce que le relecteur humain doit valider, en quelques mots",
+      "why": "Pourquoi c'est délicat dans CETTE PR, et ce qu'il faut regarder.",
+      "paths": ["chemin/relatif/concerné.ext"]
+    }
   ]
 }
 ```
@@ -41,6 +48,8 @@ pas de fence ```). Structure :
 - `summary` : requis, non vide (sert de corps à la review et de fallback).
 - `findings` : liste (éventuellement vide). Un finding sans `path`/`line` exploitable est ignoré.
 - `severity` : une des trois valeurs. `rule_id` et `snippet` sont optionnels (affichage).
+- `advice` : réservé aux relecteurs dont la persona le demande (ex. `conseil`) ; sinon,
+  omets-le. Trois au plus ; chaque `paths` doit citer des fichiers de la PR.
 - `evidence` : optionnel mais attendu. La preuve que le finding est vrai, vérifiable par un
   tiers. Chaque finding est relu par une passe de vérification avant d'être posté : un
   finding sans preuve vérifiable sera écarté.

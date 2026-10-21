@@ -101,6 +101,9 @@ class ReviewerSpec:
     verify_max_turns: int = DEFAULT_VERIFY_MAX_TURNS
     silent_when_clean: bool = False        # mode `global` : ne rien poster quand rien à dire
     context_auto: bool = True              # lire CLAUDE.md / AGENTS.md / .claude/rules seul
+    findings: bool = True                  # False = relecteur de CONSEILS (ex. `conseil`) :
+                                           # ne poste jamais de remarque, seulement ses
+                                           # « Conseil pour la relecture » (`advice`)
 
     def budget(self, config: Config) -> float:
         return self.max_budget_usd if self.max_budget_usd is not None else config.max_budget_usd
@@ -224,6 +227,7 @@ def _load_reviewer(project_name: str, project_dir: Path, reviewer_id: str,
             "verification.max_turns", reviewer_id),
         silent_when_clean=bool(data.get("silent_when_clean", False)),
         context_auto=bool(context.get("auto", True)),
+        findings=bool(data.get("findings", True)),
     )
 
 
@@ -237,6 +241,47 @@ def _positive_int(value, key: str, reviewer_id: str) -> int:
     return n
 
 
+#: Ce qu'un projet peut ajuster sur un reviewer du core, sans le copier.
+CORE_OVERRIDES = ("read", "paths", "instructions", "model", "max_turns", "priority", "enabled")
+
+
+def _adapt_core(spec: ReviewerSpec, overrides: dict, project_name: str) -> ReviewerSpec:
+    """Applique `[reviewers.<id>]` du project.toml à un reviewer du core.
+
+    - `read` : AJOUTÉ à son `context.read` (la doc du projet, là où elle est rangée) ;
+    - `paths` : remplace son `when.paths` ;
+    - `instructions` : texte ajouté à la fin de sa persona (connaissance du projet) ;
+    - `model`, `max_turns`, `priority`, `enabled` : remplacent les valeurs du core.
+    Le reste du reviewer (méthode, sortie, vérification) reste celui du core.
+    """
+    import dataclasses
+    if not isinstance(overrides, dict):
+        raise ProjectConfigError(f"projet '{project_name}' : `[reviewers.{spec.id}]` doit "
+                                 f"être une table")
+    inconnues = sorted(set(overrides) - set(CORE_OVERRIDES))
+    if inconnues:
+        raise ProjectConfigError(
+            f"projet '{project_name}' : `[reviewers.{spec.id}]` : clé(s) inconnue(s) "
+            f"{inconnues} (possibles : {', '.join(CORE_OVERRIDES)})")
+    changes: dict = {}
+    if "read" in overrides:
+        changes["context_read"] = spec.context_read + tuple(overrides["read"] or ())
+    if "paths" in overrides:
+        changes["when_paths"] = tuple(overrides["paths"] or ())
+    if overrides.get("instructions"):
+        changes["system_prompt"] = (f"{spec.system_prompt}\n\n# Spécificités de ce projet\n"
+                                    f"{str(overrides['instructions']).strip()}")
+    if "model" in overrides:
+        changes["model"] = str(overrides["model"])
+    if "max_turns" in overrides:
+        changes["max_turns"] = _positive_int(overrides["max_turns"], "max_turns", spec.id)
+    if "priority" in overrides:
+        changes["priority"] = int(overrides["priority"])
+    if "enabled" in overrides:
+        changes["enabled"] = bool(overrides["enabled"])
+    return dataclasses.replace(spec, **changes) if changes else spec
+
+
 def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
     """Charge `<projets>/<name>/`. Lève ProjectConfigError si la config est invalide."""
     root = base_dir or projects_dir()
@@ -248,37 +293,53 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
             f"projet '{name}' introuvable dans {root}"
             + (f" (disponibles : {', '.join(available)})" if available else ""))
 
-    # Les reviewers sont les DOSSIERS de `reviewers/` — pas une liste à tenir à jour ailleurs.
-    # Un manifeste séparé serait une seconde source de vérité : y oublier un dossier le rendrait
-    # silencieusement inactif. Pour mettre un reviewer en sommeil sans le supprimer :
-    # `enabled = false` dans son `reviewer.toml`.
+    # Réglages du PROJET (et non d'un reviewer), optionnels.
+    settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
+    ledger = settings.get("ledger", {}) or {}
+
+    # Deux sources de reviewers :
+    # - les DOSSIERS de `reviewers/` : les reviewers propres au projet. Pas de liste à tenir
+    #   à jour ailleurs : y oublier un dossier le rendrait silencieusement inactif ;
+    # - `[reviewers] core = [...]` du project.toml : des reviewers du CORE, utilisés tels
+    #   quels depuis `config/templates/reviewers/`, sans copie. Ils suivent les évolutions du
+    #   moteur. Un dossier local du même nom prime (le projet a voulu sa propre version).
+    # Mettre en sommeil : `enabled = false` dans le reviewer.toml local, ou retirer l'id de
+    # la liste `core`.
+    core_ids = (settings.get("reviewers", {}) or {}).get("core", []) or []
+    if not isinstance(core_ids, list):
+        raise ProjectConfigError(f"projet '{name}' : `[reviewers] core` doit être une liste")
+    disponibles = sorted(d.name for d in (TEMPLATES_DIR / "reviewers").iterdir()
+                         if d.is_dir()) if (TEMPLATES_DIR / "reviewers").is_dir() else []
+    inconnus = [r for r in core_ids if r not in disponibles]
+    if inconnus:
+        raise ProjectConfigError(
+            f"projet '{name}' : reviewer(s) du core inconnu(s) {inconnus} "
+            f"(disponibles : {', '.join(disponibles)})")
+
     rroot = pdir / "reviewers"
-    if not rroot.is_dir():
+    local_ids = sorted(d.name for d in rroot.iterdir()
+                       if d.is_dir() and not d.name.startswith(".")) if rroot.is_dir() else []
+    if not local_ids and not core_ids:
         # Un dossier de projet totalement vide = submodule git non initialisé neuf fois sur
-        # dix. Le dire, sinon le message parle d'un `reviewers/` manquant et envoie chercher
-        # au mauvais endroit.
+        # dix. Le dire, sinon le message envoie chercher au mauvais endroit.
         if not any(pdir.iterdir()):
             raise ProjectConfigError(
                 f"projet '{name}' : dossier vide ({pdir}). S'il s'agit d'un submodule git, "
                 f"l'initialiser : `git submodule update --init --recursive`")
-        raise ProjectConfigError(f"projet '{name}' : dossier `reviewers/` manquant dans {pdir}")
-
-    ids = sorted(d.name for d in rroot.iterdir() if d.is_dir() and not d.name.startswith("."))
-    if not ids:
         raise ProjectConfigError(
-            f"projet '{name}' : aucun reviewer dans {rroot} "
-            f"(un sous-dossier par reviewer, ex. `reviewers/tech/`)")
+            f"projet '{name}' : aucun reviewer (un sous-dossier de `reviewers/`, ex. "
+            f"`reviewers/tech/`, ou `[reviewers] core = [\"tech\"]` dans project.toml)")
 
     common = _load_common(pdir)
-    specs = tuple(_load_reviewer(name, pdir, rid, common) for rid in ids)
+    specs = [_load_reviewer(name, pdir, rid, common) for rid in local_ids]
+    reglages = settings.get("reviewers", {}) or {}
+    specs += [_adapt_core(_load_reviewer(name, TEMPLATES_DIR, rid, common),
+                          reglages.get(rid) or {}, name)
+              for rid in core_ids if rid not in local_ids]
     active = tuple(s for s in specs if s.enabled)
     if not active:
         raise ProjectConfigError(
             f"projet '{name}' : tous les reviewers sont désactivés (`enabled = false`)")
-
-    # Réglages du PROJET (et non d'un reviewer), optionnels.
-    settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
-    ledger = settings.get("ledger", {}) or {}
 
     return ProjectConfig(name=name, directory=pdir, reviewers=active,
                          ledger_include_text=bool(ledger.get("include_text", False)))
