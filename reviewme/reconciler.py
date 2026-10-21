@@ -239,7 +239,7 @@ class PreparedReview:
 def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             logger: logging.Logger, reviewer_id: str, *,
             output_mode: str = "inline", prefix: str = "",
-            silent_when_clean: bool = False, advice: bool = True) -> PreparedReview:
+            silent_when_clean: bool = False, advice: bool = False) -> PreparedReview:
     """Calcule ce qu'il faudrait poster pour UN reviewer. Sans effet de bord réseau."""
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]

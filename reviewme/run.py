@@ -107,6 +107,12 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
 
     result = run_reviewer(pr_number, title, diff, config, spec=spec, extra_context=extra)
     result.metadata["context_files"] = sources
+    if not spec.findings and result.findings:
+        # Relecteur sans remarques (ex. `conseil`) : ce qu'il a produit malgré la consigne
+        # n'est ni vérifié ni posté.
+        logger.info("[%s] %d finding(s) ignoré(s) : `findings = false`", spec.id,
+                    len(result.findings))
+        result.findings = []
 
     # Passe de vérification (cf. `verify.py`) : seuls les findings au-dessus du seuil, les
     # autres sont déjà écartés. Son coût s'ajoute à celui du reviewer.

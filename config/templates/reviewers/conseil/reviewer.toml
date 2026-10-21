@@ -1,0 +1,13 @@
+# Relecteur « conseil » : ne cherche pas de défauts. Il dit au relecteur HUMAIN ce qu'il doit
+# valider lui-même sur cette PR, et pourquoi. Rien d'applicable : il ne poste rien.
+output_mode = "global"     # un seul commentaire, mis à jour de commit en commit
+priority = 50              # après les relecteurs qui cherchent des défauts
+advice = true              # c'est son seul rôle
+findings = false           # il ne poste jamais de remarque, même si le modèle en produit
+silent_when_clean = true   # aucun conseil applicable : aucun commentaire
+max_turns = 25
+
+[verification]
+enabled = false            # il n'y a pas de remarque à vérifier
+
+# enabled = false          # met ce relecteur en sommeil sans supprimer son dossier

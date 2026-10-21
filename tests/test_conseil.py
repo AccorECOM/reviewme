@@ -49,18 +49,27 @@ def test_conseil_non_ancre_ecarte():
         Advice("Ordre des remboursements", "Le remboursement passe avant l'annulation.",
                ["src/payments/refund.py", "inexistant.py"]),
     ])
-    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "tech")
+    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "conseil", advice=True)
     assert prep.counts["advice"] == 1
     assert "Conseil pour la relecture" in prep.summary
     assert "Ordre des remboursements" in prep.summary and "Bien tester" not in prep.summary
     assert "inexistant.py" not in prep.summary and prep.batch == []
 
 
-def test_conseil_desactivable():
+def test_conseil_coupe_par_defaut_hors_du_relecteur_dedie():
     result = ReviewResult("COMMENT", "s", [], advice=[
         Advice("Ordre", "Pourquoi.", ["src/payments/refund.py"])])
-    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "tech", advice=False)
+    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "tech")
     assert prep.counts["advice"] == 0 and "Conseil" not in prep.summary
+
+
+def test_squelette_du_relecteur_conseil():
+    from reviewme.projects import TEMPLATES_DIR, _load_reviewer
+    spec = _load_reviewer("p", TEMPLATES_DIR, "conseil", "")
+    assert spec.advice and not spec.findings and not spec.verify
+    assert spec.output_mode == "global" and spec.silent_when_clean
+    tech = _load_reviewer("p", TEMPLATES_DIR, "tech", "")
+    assert not tech.advice and tech.findings
 
 
 def test_un_conseil_seul_fait_poster_le_resume():
@@ -76,7 +85,7 @@ def test_un_conseil_seul_fait_poster_le_resume():
 
     result = ReviewResult("COMMENT", "s", [], advice=[
         Advice("Ordre", "Pourquoi.", ["src/payments/refund.py"])])
-    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "tech")
+    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "conseil", advice=True)
     gh = GH()
     post_all(PR, _config(), gh, [prep], LOGGER)
     assert len(gh.posts) == 1 and "Conseil pour la relecture" in gh.posts[0]
@@ -86,6 +95,6 @@ def test_silencieux_mais_pas_muet_sur_un_conseil():
     result = ReviewResult("COMMENT", "Tout est couvert.", [], advice=[
         Advice("CA2 à tester à la main", "Le cas hors ligne n'a pas de test.",
                ["src/payments/refund.py"])])
-    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "us", output_mode="global",
-                   silent_when_clean=True)
+    prep = prepare(PR, _config(), _ctx(), result, LOGGER, "conseil", output_mode="global",
+                   silent_when_clean=True, advice=True)
     assert prep.global_body and "CA2 à tester" in prep.global_body

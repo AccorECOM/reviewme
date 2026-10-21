@@ -64,7 +64,6 @@ paths = ["src/api/**", "src/auth/**"]
 [context]                              # read from the reviewed repo, never copied here
 read = ["docs/security.md"]
 
-# advice = false                       # no "review tip" from this reviewer
 ```
 
 ```markdown
@@ -122,8 +121,17 @@ GitHub. Without `PROJECT`, a single generic reviewer runs (simple mode). To crea
 own reviewers:
 
 ```sh
-REVIEWME_CONFIG_HOME=$PWD/.reviewme uv run reviewme init-project my-app --reviewers tech,i18n
+REVIEWME_CONFIG_HOME=$PWD/.reviewme uv run reviewme init-project my-app --reviewers tech,i18n,conseil
 ```
+
+Reviewer templates shipped with the skeleton, to copy and adapt:
+
+| Reviewer | Role | Output |
+|---|---|---|
+| `tech` | bugs, logic, security, repository conventions | inline |
+| `us` | are the ticket's criteria covered? | one comment, silent when all are covered |
+| `i18n` | missing or doubtful translations | inline and summary |
+| `conseil` | what a human must check themselves on this PR | one comment, silent when nothing applies |
 
 In CI: a GitHub Actions example lives in [`deploy/github-actions/`](deploy/github-actions/),
 a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
@@ -139,7 +147,7 @@ a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 | on code the PR only **moved** | summary, tagged | not a defect of this PR |
 | outside the diff lines | summary | GitHub rejects comments outside the diff |
 | not confirmed by verification | nowhere (ledger) | a false positive costs the team's trust |
-| **💡 Review tip**: something a human must check themselves (call order changed, file placed outside its usual folder…) | summary | only when it applies, anchored in files of the PR; 3 at most |
+| **💡 Review tip** (`conseil` reviewer): something a human must check themselves (call order changed, file placed outside its usual folder…) | one comment | only when it applies, anchored in files of the PR; 3 at most |
 | clean PR | nothing | silence beats a "LGTM" |
 
 The bot only posts comments: never an approval or a change request.
