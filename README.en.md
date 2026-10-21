@@ -80,6 +80,18 @@ core = ["tech", "conseil"]
 | `i18n` | missing or doubtful translations | inline and summary | translation files in the PR (`*.strings`, `values*/strings.xml`…) |
 | `conseil` | what a human must check themselves on this PR | one comment, silent when nothing applies | — |
 
+**Adapt them without copying**: the project can tell a core reviewer where its docs
+are, when to run and what it should know. Everything else (method, output, verification)
+stays the engine's.
+
+```toml
+[reviewers.tech]
+read = ["Documentation/ARCHITECTURE.md", "Documentation/"]   # added to what it reads
+paths = ["src/**"]                                            # when it runs
+instructions = "Business services live in src/services; no network calls from views."
+# model = "…"   max_turns = 50   priority = 10   enabled = false
+```
+
 ### Custom reviewers: a folder in the project
 
 For what is specific to **your** code, a reviewer is a folder under

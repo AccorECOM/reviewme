@@ -81,6 +81,18 @@ core = ["tech", "conseil"]
 | `i18n` | traductions manquantes ou douteuses | en ligne et résumé | fichiers de traduction dans la PR (`*.strings`, `values*/strings.xml`…) |
 | `conseil` | ce qu'un humain doit valider lui-même sur cette PR | un commentaire, muet si rien d'applicable | — |
 
+**Les adapter sans les copier** : le projet peut indiquer à un relecteur du core où est
+sa doc, quand tourner et ce qu'il doit savoir. Le reste (méthode, sortie, vérification)
+reste celui du moteur.
+
+```toml
+[reviewers.tech]
+read = ["Documentation/ARCHITECTURE.md", "Documentation/"]   # ajouté à sa lecture
+paths = ["src/**"]                                            # quand il tourne
+instructions = "Les services métier sont dans src/services ; pas d'appel réseau dans les vues."
+# model = "…"   max_turns = 50   priority = 10   enabled = false
+```
+
 ### Relecteurs custom : un dossier dans le projet
 
 Pour ce qui est propre à **votre** code, un relecteur est un dossier sous

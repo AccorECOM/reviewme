@@ -124,3 +124,29 @@ def test_reviewers_du_core_actives_par_project_toml():
         (pdir / "project.toml").write_text('[reviewers]\ncore = ["inexistant"]\n')
         with pytest.raises(ProjectConfigError):
             load_project("boutique", Path(tmp))
+
+
+def test_reviewer_du_core_adapte_par_project_toml():
+    import tempfile
+    from pathlib import Path
+
+    import pytest
+
+    from reviewme.projects import ProjectConfigError, load_project
+    with tempfile.TemporaryDirectory() as tmp:
+        pdir = Path(tmp) / "boutique"
+        pdir.mkdir()
+        (pdir / "project.toml").write_text(
+            '[reviewers]\ncore = ["tech"]\n\n[reviewers.tech]\n'
+            'read = ["Documentation/ARCHITECTURE.md"]\npaths = ["src/**"]\n'
+            'instructions = "Les services sont dans src/services."\nmax_turns = 50\n')
+        tech = load_project("boutique", Path(tmp)).reviewers[0]
+        assert tech.context_read[-1] == "Documentation/ARCHITECTURE.md"
+        assert "AGENTS.md" in tech.context_read          # la base du core est gardée
+        assert tech.when_paths == ("src/**",) and tech.max_turns == 50
+        assert tech.system_prompt.endswith("Les services sont dans src/services.")
+
+        (pdir / "project.toml").write_text(
+            '[reviewers]\ncore = ["tech"]\n\n[reviewers.tech]\nsystem = "x"\n')
+        with pytest.raises(ProjectConfigError):
+            load_project("boutique", Path(tmp))
