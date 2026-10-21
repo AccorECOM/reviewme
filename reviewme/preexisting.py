@@ -1,16 +1,15 @@
-"""Code préexistant : une ligne « ajoutée » par la PR qui existait déjà ailleurs avant elle.
+"""Pre-existing code: a line "added" by the PR that already existed elsewhere before it.
 
-Un fichier déplacé, un bloc copié ou extrait dans une nouvelle fonction apparaissent en
-vert dans le diff. Le relecteur y trouve des défauts qui ne sont pas ceux de la PR
-(« constructeur trop long », « variable statique non protégée ») et l'auteur les reçoit comme
-des reproches injustes. Les abandonner ferait perdre un vrai problème ; on les TAGUE.
+A moved file, or a block copied or extracted into a new function, shows up green in the
+diff. The reviewer finds defects in it that are not the PR's ("constructor too long",
+"unprotected static variable") and the author receives them as unfair criticism.
+Dropping them would lose a real problem; so we TAG them.
 
-`git blame -C -C -C` suit les lignes à travers déplacements et copies, tous fichiers et
-tous commits confondus. Une ligne dont le commit d'origine n'est pas un commit de la PR
-est préexistante. Ne porte que sur les lignes qui ont un finding : -C -C -C est coûteux,
-et on n'a besoin de savoir que pour elles.
+`git blame -C -C -C` follows lines across moves and copies, across all files and all
+commits. A line whose originating commit is not a PR commit is pre-existing. Only applies
+to lines that have a finding: -C -C -C is expensive, and we only need to know for them.
 
-Best-effort : clone peu profond, base absente, git en échec -> rien n'est tagué.
+Best-effort: shallow clone, missing base, git failure -> nothing is tagged.
 """
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ def _git(repo_path: str, *args: str) -> str | None:
 
 
 def pr_commits(repo_path: str, base_ref: str) -> set[str] | None:
-    """Commits de la PR (`origin/<base>..HEAD`), ou None si la base est introuvable."""
+    """The PR's commits (`origin/<base>..HEAD`), or None if the base cannot be found."""
     out = _git(repo_path, "rev-list", f"origin/{base_ref}..HEAD")
     return None if out is None else {sha.strip() for sha in out.splitlines() if sha.strip()}
 
@@ -42,8 +41,8 @@ DEADLINE_S = 120
 
 def preexisting_lines(repo_path: str, path: str, lines: set[int],
                       commits: set[str]) -> set[int]:
-    """Parmi `lines` (côté HEAD), celles dont l'origine précède la PR. Un seul `blame` par
-    fichier, avec un `-L` par ligne."""
+    """Among `lines` (HEAD side), those whose origin predates the PR. A single `blame` per
+    file, with one `-L` per line."""
     args = ["blame", "-C", "-C", "-C", "-w", "--porcelain"]
     for line in sorted(lines):
         args += ["-L", f"{line},{line}"]
@@ -62,7 +61,7 @@ def preexisting_lines(repo_path: str, path: str, lines: set[int],
 
 
 def removed_lines(diff: str) -> set[str]:
-    """Contenus normalisés des lignes SUPPRIMÉES par la PR."""
+    """Normalized contents of the lines REMOVED by the PR."""
     from .diff_utils import normalize_line
     return {normalize_line(b[1:]) for b in diff.splitlines()
             if b.startswith("-") and not b.startswith("---") and normalize_line(b[1:])}
@@ -70,16 +69,16 @@ def removed_lines(diff: str) -> set[str]:
 
 def tag_preexisting(findings: list, repo_path: str, base_ref: str,
                     logger: logging.Logger, anchor_of=None, removed: set[str] | None = None) -> int:
-    """Pose `preexisting = True` sur les findings qui portent sur du code DÉPLACÉ par la PR.
+    """Set `preexisting = True` on findings about code MOVED by the PR.
 
-    Deux conditions : le blame fait remonter la ligne avant la PR, ET son contenu fait
-    partie des lignes que la PR supprime ailleurs. Sans la seconde, une ligne COPIÉE (un
-    motif dangereux recollé) passerait pour préexistante alors que la PR l'introduit.
+    Two conditions: blame traces the line back to before the PR, AND its content is among
+    the lines the PR removes elsewhere. Without the second, a COPIED line (a dangerous
+    pattern pasted again) would pass as pre-existing even though the PR introduces it.
 
-    Une ligne de CONTEXTE du diff (non ajoutée, typiquement dans un fichier renommé) est
-    préexistante par définition, sans blame.
+    A CONTEXT line of the diff (not added, typically in a renamed file) is pre-existing
+    by definition, without blame.
 
-    `anchor_of(finding)` -> (ligne, contenu[, ajoutée]) ré-ancrés sur le diff, ou None.
+    `anchor_of(finding)` -> (line, content[, added]) re-anchored on the diff, or None.
     """
     import time
 
@@ -98,8 +97,8 @@ def tag_preexisting(findings: list, repo_path: str, base_ref: str,
         return tagged
     commits = pr_commits(repo_path, base_ref)
     if not commits:
-        logger.info("pré-existant : commits de la PR introuvables (base origin/%s, clone "
-                    "peu profond ?) — aucun tag", base_ref)
+        logger.info("pre-existing: PR commits not found (base origin/%s, shallow "
+                    "clone?) — no tag", base_ref)
         return tagged
     by_path: dict[str, set[int]] = {}
     for f in findings:
@@ -110,7 +109,7 @@ def tag_preexisting(findings: list, repo_path: str, base_ref: str,
     old: set[tuple[str, int]] = set()
     for path, ls in by_path.items():
         if time.monotonic() > deadline:
-            logger.info("pré-existant : délai de %ds atteint, fichiers restants non examinés",
+            logger.info("pre-existing: %ds deadline reached, remaining files not examined",
                         DEADLINE_S)
             break
         old |= {(path, n) for n in preexisting_lines(repo_path, path, ls, commits)}

@@ -1,16 +1,16 @@
-"""Client REST GitHub pour ReviewMe.
+"""GitHub REST client for ReviewMe.
 
-Ce qu'exige l'inline et le cycle de vie des threads :
-- list_review_comments : lister les commentaires de review (dédup)
-- create_review        : poster une review avec un batch de commentaires inline (1 write)
-- reply_to_comment     : répondre dans un thread existant (ré-ancrage / dialogue dev)
-- list_open_prs        : mode "toute PR ouverte" (sans filtre label)
-- get_authenticated_login : identité du token
+What inline comments and the thread lifecycle require:
+- list_review_comments : list review comments (dedup)
+- create_review        : post a review with a batch of inline comments (1 write)
+- reply_to_comment     : reply in an existing thread (re-anchoring / dev dialogue)
+- list_open_prs        : "any open PR" mode (no label filter)
+- get_authenticated_login : the token's identity
 
-Le resolve/unresolve de thread (GraphQL `resolveReviewThread`) est volontairement ABSENT :
-GitHub replie déjà les commentaires outdated, le bot répond « n'apparaît plus » sur le fil,
-et la mutation exige `pull_requests: write` (scope à vérifier sur le token de chaque
-instance). La LECTURE de l'état des fils (`review_threads`) sert au registre.
+Thread resolve/unresolve (GraphQL `resolveReviewThread`) is deliberately ABSENT: GitHub
+already collapses outdated comments, the bot replies "no longer appears" in the thread,
+and the mutation requires `pull_requests: write` (scope to check on each instance's
+token). READING the threads' state (`review_threads`) feeds the ledger.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ API_BASE = "https://api.github.com"
 
 
 class GitHubApiError(RuntimeError):
-    """Erreur d'API GitHub portant le code HTTP et le corps, pour un traitement défensif
-    (ex. 422 sur un batch de review)."""
+    """GitHub API error carrying the HTTP code and body, for defensive handling
+    (e.g. 422 on a review batch)."""
 
     def __init__(self, status_code: int, body: str, message: str = "") -> None:
         self.status_code = status_code
@@ -44,11 +44,11 @@ class GitHubClient:
     def close(self) -> None:
         self._client.close()
 
-    # ------------------------------------------------------------------ requêtes
+    # ------------------------------------------------------------------ requests
     def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
-        """Requête avec un backoff simple sur secondary rate limit (403/429)."""
-        # Le token d'une GitHub App expire en 1 h : on le (re)pose à chaque requête plutôt
-        # que de le figer à la construction du client (le mode poll tourne en continu).
+        """Request with a simple backoff on secondary rate limit (403/429)."""
+        # A GitHub App token expires in 1 h: set it again on every request rather than
+        # freezing it when the client is built (poll mode runs continuously).
         self._client.headers["Authorization"] = f"Bearer {self._auth.token()}"
         for attempt in range(3):
             resp = self._client.request(method, url, **kwargs)
@@ -63,9 +63,9 @@ class GitHubClient:
             return resp
         return resp
 
-    # ------------------------------------------------------------------ lecture PR
+    # ------------------------------------------------------------------ PR reading
     def get_authenticated_login(self) -> str:
-        # Une GitHub App n'a pas de `/user` : son identité est `<slug>[bot]`.
+        # A GitHub App has no `/user`: its identity is `<slug>[bot]`.
         if getattr(self._auth, "is_app", False):
             return self._auth.bot_login()
         resp = self._request("GET", f"{API_BASE}/user")
@@ -80,7 +80,7 @@ class GitHubClient:
         return [self.get_pr(item["number"]) for item in resp.json().get("items", [])]
 
     def list_open_prs(self) -> list[dict]:
-        """Toutes les PR ouvertes (mode review_all_prs, sans filtre label)."""
+        """All open PRs (review_all_prs mode, no label filter)."""
         prs: list[dict] = []
         page = 1
         while True:
@@ -126,7 +126,7 @@ class GitHubClient:
         return files
 
     def list_review_comments(self, pr_number: int) -> list[dict]:
-        """Tous les commentaires de review (inline) de la PR, paginés."""
+        """All of the PR's (inline) review comments, paginated."""
         comments: list[dict] = []
         page = 1
         while True:
@@ -143,7 +143,7 @@ class GitHubClient:
         return comments
 
     def list_review_comments_of_review(self, pr_number: int, review_id: int) -> list[dict]:
-        """Commentaires d'UNE review (pour rattacher leurs ids aux findings postés)."""
+        """Comments of ONE review (to link their ids to the posted findings)."""
         comments: list[dict] = []
         page = 1
         while True:
@@ -161,10 +161,10 @@ class GitHubClient:
         return comments
 
     def list_issue_comments(self, pr_number: int) -> list[dict]:
-        """Commentaires globaux (issue comments) de la PR, paginés.
+        """The PR's global comments (issue comments), paginated.
 
-        Nécessaire aux reviewers en mode `global` (ADR v3 D2) : sans dédup, ils reposteraient
-        leur commentaire à chaque commit.
+        Needed by reviewers in `global` mode (ADR v3 D2): without dedup, they would repost
+        their comment on every commit.
         """
         comments: list[dict] = []
         page = 1
@@ -181,22 +181,22 @@ class GitHubClient:
             page += 1
         return comments
 
-    # ------------------------------------------------------------------ devenir des remarques
-    # Lecture seule, pour `reviewme enrich` : ce qu'il est advenu des commentaires du bot.
+    # ------------------------------------------------------------------ fate of findings
+    # Read-only, for `reviewme enrich`: what became of the bot's comments.
 
     def list_comment_reactions(self, comment_id: int) -> list[dict]:
-        """Réactions (👍, 👎…) sur un commentaire de review."""
+        """Reactions (👍, 👎…) on a review comment."""
         resp = self._request(
             "GET", f"{API_BASE}/repos/{self._repo}/pulls/comments/{comment_id}/reactions",
             params={"per_page": 100},
         )
         if resp.status_code == 404:
-            return []                      # commentaire supprimé depuis
+            return []                      # comment deleted since
         resp.raise_for_status()
         return resp.json()
 
     def list_pr_commits(self, pr_number: int) -> list[dict]:
-        """Commits de la PR, du plus ancien au plus récent (250 au plus, limite de l'API)."""
+        """The PR's commits, oldest to newest (250 at most, API limit)."""
         commits: list[dict] = []
         page = 1
         while page <= 3:
@@ -213,7 +213,7 @@ class GitHubClient:
         return commits
 
     def get_file_at(self, path: str, ref: str) -> str | None:
-        """Contenu brut d'un fichier à un commit, ou None s'il n'existe pas (supprimé)."""
+        """Raw content of a file at a commit, or None if it does not exist (deleted)."""
         resp = self._request(
             "GET", f"{API_BASE}/repos/{self._repo}/contents/{path}",
             params={"ref": ref},
@@ -225,7 +225,7 @@ class GitHubClient:
         return resp.text
 
     def get_permission(self, login: str) -> str:
-        """Droit d'un utilisateur sur le dépôt (`admin`, `write`, `read`, `none`)."""
+        """A user's permission on the repo (`admin`, `write`, `read`, `none`)."""
         resp = self._request(
             "GET", f"{API_BASE}/repos/{self._repo}/collaborators/{login}/permission")
         if resp.status_code >= 400:
@@ -233,7 +233,7 @@ class GitHubClient:
         return resp.json().get("permission", "none")
 
     def review_threads(self, pr_number: int) -> list[dict]:
-        """Fils de review (résolus ou non) via GraphQL — l'API REST ne l'expose pas."""
+        """Review threads (resolved or not) via GraphQL — the REST API does not expose this."""
         owner, name = self._repo.split("/")
         query = """query($o:String!,$n:String!,$pr:Int!,$after:String){repository(owner:$o,name:$n){
           pullRequest(number:$pr){reviewThreads(first:100,after:$after){
@@ -241,7 +241,7 @@ class GitHubClient:
           resolvedBy{login} comments(first:1){nodes{databaseId}}}}}}}"""
         nodes: list[dict] = []
         after = None
-        for _ in range(20):                # 2 000 fils au plus : au-delà, ce n'est plus une PR
+        for _ in range(20):                # 2,000 threads at most: beyond that, it is no longer a PR
             resp = self._request("POST", f"{API_BASE}/graphql", json={
                 "query": query,
                 "variables": {"o": owner, "n": name, "pr": pr_number, "after": after}})
@@ -256,9 +256,9 @@ class GitHubClient:
             after = info.get("endCursor")
         return nodes
 
-    # ------------------------------------------------------------------ écriture
+    # ------------------------------------------------------------------ writing
     def post_issue_comment(self, pr_number: int, body: str) -> dict:
-        """Commentaire global (issue comment) — chemin de repli quand l'inline est impossible."""
+        """Global comment (issue comment) — fallback path when inline is impossible."""
         resp = self._request(
             "POST", f"{API_BASE}/repos/{self._repo}/issues/{pr_number}/comments",
             json={"body": body},
@@ -274,10 +274,10 @@ class GitHubClient:
         comments: list[dict],
         event: str = "COMMENT",
     ) -> dict:
-        """Poste une review avec un batch de commentaires inline en UN seul write.
+        """Post a review with a batch of inline comments in ONE single write.
 
-        `comments` : liste de {path, line, side, body}. Lève GitHubApiError sur 422
-        (batch atomique : à traiter défensivement par l'appelant).
+        `comments`: list of {path, line, side, body}. Raises GitHubApiError on 422
+        (atomic batch: to be handled defensively by the caller).
         """
         payload: dict = {"commit_id": commit_id, "event": event, "comments": comments}
         if body:
@@ -290,10 +290,10 @@ class GitHubClient:
         return resp.json()
 
     def update_issue_comment(self, comment_id: int, body: str) -> dict:
-        """Met à jour un commentaire global existant (mode `global`, ADR v3 D2).
+        """Update an existing global comment (`global` mode, ADR v3 D2).
 
-        Mettre à jour plutôt qu'empiler : le reviewer `us` ne doit pas laisser un nouveau
-        commentaire à chaque commit.
+        Update rather than pile up: the `us` reviewer must not leave a new comment on every
+        commit.
         """
         resp = self._request(
             "PATCH", f"{API_BASE}/repos/{self._repo}/issues/comments/{comment_id}",
@@ -303,7 +303,7 @@ class GitHubClient:
         return resp.json()
 
     def reply_to_comment(self, pr_number: int, comment_id: int, body: str) -> dict:
-        """Répond dans un thread existant (le comment_id doit être le commentaire racine)."""
+        """Reply in an existing thread (comment_id must be the root comment)."""
         resp = self._request(
             "POST",
             f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/comments/{comment_id}/replies",

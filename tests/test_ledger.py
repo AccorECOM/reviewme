@@ -1,10 +1,10 @@
-"""Tests du registre (`ledger.py`) et du sort des findings dans `prepare` / `post_all`.
+"""Tests for the ledger (`ledger.py`) and for the fate of findings in `prepare` / `post_all`.
 
-Ce qui compte : chaque finding produit par le modèle laisse UNE trace, posté ou non, avec
-le bon sort. Un finding qui disparaît sans trace (sous le seuil, hors diff, plafonné) est
-exactement ce qu'on ne peut plus mesurer ensuite.
+What matters: every finding produced by the model leaves ONE trace, posted or not, with
+the right fate. A finding that vanishes without a trace (below threshold, outside the diff,
+capped) is exactly what can no longer be measured afterwards.
 
-Exécution : `pytest tests/`.
+Run: `pytest tests/`.
 """
 import json
 import logging
@@ -25,7 +25,7 @@ from reviewme.reconciler import PrContext, fingerprint_hash, post_all, prepare
 LOGGER = logging.getLogger("test-ledger")
 LOGGER.addHandler(logging.NullHandler())
 PR = {"number": 7, "head": {"sha": "abcdef1234567890"}, "base": {"sha": "0123456789ab"},
-      "title": "PR de test"}
+      "title": "Test PR"}
 DIFF = "+++ b/a.swift\n@@ -1 +1,2 @@\n+let x = y!\n+let z = 1\n"
 
 
@@ -57,7 +57,7 @@ def _project(directory=None, include_text=False):
 
 
 class _FakeGH:
-    """Client GitHub minimal : enregistre les écritures, renvoie des ids."""
+    """Minimal GitHub client: records writes, returns ids."""
 
     def __init__(self):
         self.posted = []
@@ -74,9 +74,9 @@ class _FakeGH:
         return {"id": 555}
 
 
-# --------------------------------------------------------------- sorts dans prepare
+# --------------------------------------------------------------- fates in prepare
 
-def test_chaque_finding_recoit_un_sort():
+def test_every_finding_gets_a_fate():
     findings = [_f(10, 95), _f(11, 40, snippet="let z = 1"), _f(300, 90, path="b.swift")]
     result = ReviewResult(status="COMMENT", summary="s", findings=findings)
     prep = prepare(PR, _config(), _ctx(), result, LOGGER, "tech")
@@ -84,14 +84,14 @@ def test_chaque_finding_recoit_un_sort():
     assert prep.findings[2].in_summary is True
 
 
-def test_sous_le_seuil_reste_ancre_sur_la_ligne():
-    """Sans ancrage, on ne peut pas croiser avec un commentaire humain sur la même ligne."""
+def test_below_threshold_stays_anchored_on_line():
+    """Without anchoring, it cannot be matched with a human comment on the same line."""
     f = _f(11, 30, snippet="let z = 1")
     prepare(PR, _config(), _ctx(), ReviewResult("COMMENT", "s", [f]), LOGGER, "tech")
     assert f.fate == "dropped_low" and f.line_content == "let z = 1"
 
 
-def test_deja_commente_est_deduplique_avec_son_commentaire():
+def test_already_commented_is_deduped_with_its_comment():
     ctx = _ctx()
     ctx.inline_by_marker[("tech", fingerprint_hash("a.swift", "let x = y!"))] = {
         "id": 42, "position": 3}
@@ -100,7 +100,7 @@ def test_deja_commente_est_deduplique_avec_son_commentaire():
     assert f.fate == "deduped" and f.comment_id == 42
 
 
-def test_plafond_marque_capped_et_post_rattache_les_ids():
+def test_cap_marks_capped_and_post_attaches_ids():
     findings = [_f(10, 95, Severity.BLOCKER), _f(11, 80, Severity.IMPORTANT)]
     result = ReviewResult("COMMENT", "s", findings)
     prep = prepare(PR, _config(dry_run=False, max_comments_per_pr=1), _ctx(), result,
@@ -111,15 +111,15 @@ def test_plafond_marque_capped_et_post_rattache_les_ids():
     assert findings[1].fate == "capped" and findings[1].comment_id is None
 
 
-def test_parsing_compte_les_findings_invalides():
+def test_parsing_counts_invalid_findings():
     r = parse_review_output(json.dumps({"summary": "s", "findings": [
         {"path": "a", "line": 1, "severity": "warning", "confidence": 80},
-        {"path": "", "line": 3}, {"line": "x"}, "pas un objet"]}))
+        {"path": "", "line": 3}, {"line": "x"}, "not an object"]}))
     assert len(r.findings) == 1 and r.invalid == 3
     assert r.findings[0].severity_raw == "warning"
 
 
-# --------------------------------------------------------------- écriture du registre
+# --------------------------------------------------------------- ledger writing
 
 def _record(tmp, project=None, **cfg):
     findings = [_f(10, 95), _f(11, 40, snippet="let z = 1")]
@@ -137,7 +137,7 @@ def _record(tmp, project=None, **cfg):
         ledger.read_all(Path(tmp), "runs.jsonl")
 
 
-def test_registre_garde_les_ecartes_avec_leur_confiance():
+def test_ledger_keeps_dropped_with_their_confidence():
     with tempfile.TemporaryDirectory() as tmp:
         run_id, rows, _runs = _record(tmp)
     assert run_id and {r["run_id"] for r in rows} == {run_id}
@@ -149,20 +149,20 @@ def test_registre_garde_les_ecartes_avec_leur_confiance():
     assert low["verification"]["status"] == "skipped"
 
 
-def test_registre_sans_texte_par_defaut():
+def test_ledger_without_text_by_default():
     with tempfile.TemporaryDirectory() as tmp:
         _, rows, _ = _record(tmp)
     assert all("message" not in r for r in rows)
 
 
-def test_registre_avec_texte_si_le_projet_le_demande():
+def test_ledger_with_text_when_project_asks():
     with tempfile.TemporaryDirectory() as tmp:
         _, rows, _ = _record(tmp, project=_project(include_text=True))
     posted = next(r for r in rows if r["fate"] == "posted")
     assert posted["message"] == "m10"
 
 
-def test_ligne_de_run():
+def test_run_row():
     with tempfile.TemporaryDirectory() as tmp:
         _, _, runs = _record(tmp)
     (run,) = runs
@@ -173,34 +173,34 @@ def test_ligne_de_run():
     assert run["context_files"][0]["path"] == "AGENTS.md"
 
 
-def test_variante_temoin(monkeypatch):
+def test_baseline_variant(monkeypatch):
     monkeypatch.setenv("REVIEWME_LEDGER_VARIANT", "baseline")
     with tempfile.TemporaryDirectory() as tmp:
         _, rows, runs = _record(tmp)
     assert {r["variant"] for r in rows + runs} == {"baseline"}
 
 
-def test_mode_simule_ecrit_a_part(monkeypatch):
+def test_simulated_mode_writes_separately(monkeypatch):
     monkeypatch.delenv("REVIEWME_LEDGER_DIR", raising=False)
-    assert ledger.ledger_dir(_config(fake=True)).name == "ledger-simule"
+    assert ledger.ledger_dir(_config(fake=True)).name == "ledger-fake"
     assert ledger.ledger_dir(_config()).name == "ledger"
-    # Même quand la CI impose le dossier : un run simulé ne pollue jamais le vrai registre.
-    monkeypatch.setenv("REVIEWME_LEDGER_DIR", "/cache/registre")
-    assert str(ledger.ledger_dir(_config(fake=True))) == "/cache/registre-simule"
+    # Even when CI forces the folder: a simulated run never pollutes the real ledger.
+    monkeypatch.setenv("REVIEWME_LEDGER_DIR", "/cache/ledger")
+    assert str(ledger.ledger_dir(_config(fake=True))) == "/cache/ledger-fake"
 
 
-def test_un_fichier_par_run_et_lignes_corrompues_ignorees():
+def test_one_file_per_run_and_corrupt_lines_ignored():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _record(tmp)
         _record(tmp)
         assert len(list((root / "findings").glob("*.jsonl"))) == 2
-        (root / "findings.jsonl").write_text('{"fate": "posted"}\n{coupé\n')
+        (root / "findings.jsonl").write_text('{"fate": "posted"}\n{truncated\n')
         rows = ledger.read_all(root, "findings.jsonl")
         assert len(rows) == 1 + 2 * 3
 
 
-def test_hash_de_config_suit_les_reglages():
+def test_config_hash_follows_settings():
     with tempfile.TemporaryDirectory() as tmp:
         pdir = Path(tmp) / "p"
         (pdir / "reviewers" / "tech").mkdir(parents=True)
@@ -214,7 +214,7 @@ def test_hash_de_config_suit_les_reglages():
         (pdir / "reviewers" / "tech" / "system.md").write_text("persona v2")
         assert ledger.config_hash(project) != h1
 
-        out = Path(tmp) / "registre"
+        out = Path(tmp) / "ledger"
         ledger.snapshot_config(project, out, h1)
         manifest = json.loads((out / "config-snapshot" / h1 / "manifest.json").read_text())
         assert "reviewers/tech/system.md" in manifest["files"]
@@ -222,7 +222,7 @@ def test_hash_de_config_suit_les_reglages():
         assert not (out / "config-snapshot" / h1 / "reviewers/tech/system.md").exists()
 
 
-def test_registre_ne_casse_jamais_la_review():
-    """Un registre illisible ou une entrée incohérente : None, pas d'exception."""
+def test_ledger_never_breaks_the_review():
+    """An unreadable ledger or an inconsistent entry: None, no exception."""
     assert ledger.record(PR, _config(), _project(), [object()], [], DIFF, LOGGER,
                          root=Path("/nonexistent/x")) is None

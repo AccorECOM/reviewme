@@ -1,13 +1,13 @@
-# Unité systemd pour le mode webhook sur un VPS (always-on).
-# À placer dans /etc/systemd/system/reviewme-webhook.service, puis :
+# systemd unit for webhook mode on a VPS (always-on).
+# Place in /etc/systemd/system/reviewme-webhook.service, then:
 #   systemctl daemon-reload && systemctl enable --now reviewme-webhook
 #
-# ⚠️ Sécurité : exposer le port via un reverse-proxy TLS (nginx/Caddy), jamais en direct.
-# Idéalement, exécuter le moteur dans un conteneur/sandbox SANS réseau sortant hors GitHub
-# (mitigation n°1 de la prompt-injection) — cf. doc §Sécurité.
+# ⚠️ Security: expose the port through a TLS reverse proxy (nginx/Caddy), never directly.
+# Ideally, run the engine in a container/sandbox WITHOUT outbound network except GitHub
+# (mitigation #1 against prompt injection) — see doc §Security.
 
 [Unit]
-Description=ReviewMe webhook (review PR one-shot déclenchée par GitHub)
+Description=ReviewMe webhook (one-shot PR review triggered by GitHub)
 After=network-online.target
 Wants=network-online.target
 
@@ -15,11 +15,11 @@ Wants=network-online.target
 Type=simple
 User=reviewme
 WorkingDirectory=/opt/reviewme
-EnvironmentFile=/opt/reviewme/.env          # contient GITHUB_TOKEN, ANTHROPIC_API_KEY, WEBHOOK_SECRET
+EnvironmentFile=/opt/reviewme/.env          # contains GITHUB_TOKEN, ANTHROPIC_API_KEY, WEBHOOK_SECRET
 ExecStart=/usr/bin/env uv run reviewme-webhook
 Restart=on-failure
 RestartSec=5
-# Durcissement de base
+# Basic hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

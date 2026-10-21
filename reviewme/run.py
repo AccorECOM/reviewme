@@ -1,18 +1,18 @@
-"""`run_review` : la fonction commune à TOUTES les entrées (CLI, poll, webhook).
+"""`run_review`: the function shared by ALL entry points (CLI, poll, webhook).
 
-C'est la brique one-shot (« review cette PR, une fois, puis rends la main »). Chaque
-point d'entrée ne fait que résoudre une PR puis appeler cette fonction — aucune logique
-de review dupliquée ailleurs.
+It is the one-shot building block ("review this PR, once, then return"). Each entry
+point only resolves a PR and then calls this function — no review logic is duplicated
+elsewhere.
 
-Fan-out v3 (ADR v3 D4/D5/D8) :
-  1. résolution du projet (`PROJECT`) et de ses reviewers ;
-  2. SÉLECTION : un reviewer ne tourne que si le diff le concerne (`when.paths`) et si son
-     contexte requis est disponible (ex. ticket Jira) — sans ce filtre, chaque PR paierait
-     tous les reviewers du projet ;
-  3. exécution EN PARALLÈLE (chaque reviewer est un `claude -p` indépendant, avec son propre
-     `--max-budget-usd`). Le coût total de la PR est journalisé ; un arrêt net au plafond
-     supposerait une exécution séquentielle par priorité — non retenu pour l'instant ;
-  4. écriture GitHub UNIQUE via `post_all` (dédup partagée, rate limit, plafond D6).
+v3 fan-out (ADR v3 D4/D5/D8):
+  1. resolve the project (`PROJECT`) and its reviewers;
+  2. SELECTION: a reviewer only runs if the diff concerns it (`when.paths`) and its
+     required context is available (e.g. Jira ticket) — without this filter, every PR
+     would pay for all the project's reviewers;
+  3. PARALLEL execution (each reviewer is an independent `claude -p`, with its own
+     `--max-budget-usd`). The PR's total cost is logged; a hard stop at the cap would
+     require sequential execution by priority — not adopted for now;
+  4. a SINGLE GitHub write via `post_all` (shared dedup, rate limit, D6 cap).
 """
 from __future__ import annotations
 
@@ -39,10 +39,10 @@ from .stats import enregistrer as enregistrer_stats
 
 
 def _gather_context(pr: dict, config: Config, logger: logging.Logger) -> tuple[dict, set[str]]:
-    """Contextes externes disponibles pour cette PR (ADR v3 D9).
+    """External contexts available for this PR (ADR v3 D9).
 
-    Chaque fournisseur est OPTIONNEL : indisponible -> le reviewer qui l'exige est skippé,
-    jamais une erreur. Le core ne dépend d'aucune source externe.
+    Each provider is OPTIONAL: unavailable -> the reviewer that requires it is skipped,
+    never an error. The core depends on no external source.
     """
     context: dict[str, str] = {}
     try:
@@ -51,7 +51,7 @@ def _gather_context(pr: dict, config: Config, logger: logging.Logger) -> tuple[d
         if ticket:
             context["jira_ticket"] = ticket
     except Exception as e:
-        logger.info("Contexte Jira indisponible (%s) — les reviewers qui l'exigent seront skippés", e)
+        logger.info("Jira context unavailable (%s) — reviewers that require it will be skipped", e)
     return context, set(context)
 
 
@@ -59,33 +59,33 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
              config: Config, context: dict, logger: logging.Logger,
              historique: str = "", changed_paths: list[str] | None = None,
              reader=None):
-    """Exécute un reviewer (précheck déterministe puis LLM). Renvoie (spec, result)."""
-    # Plugins déclarés par le reviewer : skills et agents dont il a besoin (installés une
-    # fois, puis réutilisés). Un échec ici ne concerne QUE ce reviewer.
+    """Runs one reviewer (deterministic precheck, then LLM). Returns (spec, result)."""
+    # Plugins declared by the reviewer: skills and agents it needs (installed once,
+    # then reused). A failure here only affects THIS reviewer.
     if spec.plugins_marketplaces or spec.plugins_install:
         from .plugins import ensure_plugins
         from .reviewer import _find_claude
         ensure_plugins(spec, _find_claude(config), logger)
 
     blocks = [context[k] for k in spec.requires if k in context]
-    # Ce que le reviewer a réellement reçu, pour le registre (`runs.jsonl`).
+    # What the reviewer actually received, for the ledger (`runs.jsonl`).
     sources: list[dict] = [{"path": k, "bytes": len(context[k]), "truncated": False,
                             "source": "context"} for k in spec.requires if k in context]
 
-    # Ce qui a déjà été dit sur cette PR, et ce qu'on y a répondu.
+    # What has already been said on this PR, and what was answered.
     if historique:
         blocks.append(historique)
         sources.append({"path": "historique", "bytes": len(historique), "truncated": False,
                         "source": "historique"})
 
-    # Conventions du dépôt : déclarées dans reviewer.toml, lues à la source (D13).
+    # Repo conventions: declared in reviewer.toml, read at the source (D13).
     from .repo_context import build_repo_context
     conventions = build_repo_context(spec, config.repo_path, logger, sources, reader)
     if conventions:
         blocks.append(conventions)
 
-    # Instructions du dépôt lues sans rien déclarer (CLAUDE.md, AGENTS.md, .claude/rules),
-    # filtrées sur les fichiers modifiés. `[context] auto = false` pour s'en passer.
+    # Repo instructions read without declaring anything (CLAUDE.md, AGENTS.md, .claude/rules),
+    # filtered on the changed files. `[context] auto = false` to opt out.
     if spec.context_auto and changed_paths and not config.baseline:
         from .repo_context import build_auto_context
         auto = build_auto_context(changed_paths, config.repo_path, logger, sources,
@@ -96,8 +96,8 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
     extra = "\n\n".join(blocks)
 
     if spec.precheck:
-        # ADR v3 D7 : le déterministe d'abord — ce qu'un script sait prouver ne doit pas être
-        # payé au LLM (ex. « clé présente en fr, absente en de »).
+        # ADR v3 D7: deterministic first — what a script can prove must not be paid
+        # to the LLM (e.g. "key present in fr, missing in de").
         from .precheck import run_precheck
         facts = run_precheck(spec, config, logger, diff)
         if facts:
@@ -108,14 +108,14 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
     result = run_reviewer(pr_number, title, diff, config, spec=spec, extra_context=extra)
     result.metadata["context_files"] = sources
     if not spec.findings and result.findings:
-        # Relecteur sans remarques (ex. `conseil`) : ce qu'il a produit malgré la consigne
-        # n'est ni vérifié ni posté.
-        logger.info("[%s] %d finding(s) ignoré(s) : `findings = false`", spec.id,
+        # Reviewer without findings (e.g. `conseil`): whatever it produced despite the
+        # instruction is neither verified nor posted.
+        logger.info("[%s] %d finding(s) ignored: `findings = false`", spec.id,
                     len(result.findings))
         result.findings = []
 
-    # Passe de vérification (cf. `verify.py`) : seuls les findings au-dessus du seuil, les
-    # autres sont déjà écartés. Son coût s'ajoute à celui du reviewer.
+    # Verification pass (see `verify.py`): only findings above the threshold, the others
+    # are already discarded. Its cost adds up to the reviewer's.
     if config.verify and spec.verify and result.parsed_ok:
         from .verify import verify_findings
         candidats = [f for f in result.findings if f.confidence >= config.confidence_threshold]
@@ -125,7 +125,7 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
         result.metadata["verification"] = bilan
         result.metadata["review_cost_usd"] = result.metadata.get("cost_usd", 0) or 0
         result.metadata["cost_usd"] = result.metadata["review_cost_usd"] + bilan.get("cost_usd", 0)
-    logger.info("PR #%s [%s] : %d findings, parsed=%s, modèle=%s, coût $%.4f",
+    logger.info("PR #%s [%s]: %d findings, parsed=%s, model=%s, cost $%.4f",
                 pr_number, spec.id, len(result.findings), result.parsed_ok,
                 result.metadata.get("model", "?"), result.metadata.get("cost_usd", 0))
     return spec, result
@@ -133,8 +133,8 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
 
 def _tag_preexisting(outcomes, ctx, base_ref: str | None, config: Config,
                      logger: logging.Logger, pr_number: int, diff: str) -> None:
-    """Tague les findings postables qui portent sur du code déplacé ou copié (cf.
-    `preexisting.py`). Ils iront dans le résumé, marqués comme tels."""
+    """Tags postable findings that are about moved or copied code (see
+    `preexisting.py`). They will go into the summary, marked as such."""
     from .diff_utils import resolve_line
     from .preexisting import removed_lines, tag_preexisting
 
@@ -153,16 +153,16 @@ def _tag_preexisting(outcomes, ctx, base_ref: str | None, config: Config,
     n = tag_preexisting(candidats, config.repo_path, base_ref or "", logger, anchor_of,
                         removed_lines(diff))
     if n:
-        logger.info("PR #%s : %d finding(s) sur du code préexistant (déplacé ou copié)",
+        logger.info("PR #%s: %d finding(s) on pre-existing code (moved or copied)",
                     pr_number, n)
 
 
 def trusted_base(base_ref: str | None, default_branch: str | None) -> bool:
-    """La branche de base est-elle une source de config de confiance ?
+    """Is the base branch a trusted config source?
 
-    `base_ref` vient de la PR : quiconque pousse une branche peut ouvrir une PR VERS elle
-    et y avoir préparé la config (et le precheck) qui la relira. Seules la branche par
-    défaut et les motifs de `REVIEWME_TRUSTED_BASES` (ex. `develop,release/*`) comptent.
+    `base_ref` comes from the PR: anyone who pushes a branch can open a PR TOWARDS it
+    and have prepared there the config (and the precheck) that will review it. Only the
+    default branch and the patterns of `REVIEWME_TRUSTED_BASES` (e.g. `develop,release/*`) count.
     """
     from fnmatch import fnmatchcase
     if not base_ref:
@@ -176,19 +176,19 @@ def trusted_base(base_ref: str | None, default_branch: str | None) -> bool:
 
 def config_from_base(config: Config, base_ref: str | None, workdir: str,
                      logger: logging.Logger, *, default_branch: str | None = None) -> Config:
-    """La config du projet telle qu'elle est sur la BRANCHE DE BASE, pas sur la PR.
+    """The project config as it is on the BASE BRANCH, not on the PR.
 
-    Quand la config vit dans le dépôt relu (`REVIEWME_CONFIG_HOME` sous `REPO_PATH`, ex.
-    `.reviewme/`), le checkout est celui de la PR : un tiers pourrait réécrire le
-    `system.md` du relecteur qui le relit, ou son precheck — du code exécuté avec les
-    secrets de la CI. On extrait donc ce dossier depuis `origin/<base>` dans `workdir`.
-    « Une PR ne peut pas changer la façon dont elle est relue » : une modification de la
-    config ne s'applique qu'une fois mergée.
+    When the config lives in the reviewed repo (`REVIEWME_CONFIG_HOME` under `REPO_PATH`,
+    e.g. `.reviewme/`), the checkout is the PR's: a third party could rewrite the
+    `system.md` of the reviewer that reviews it, or its precheck — code run with the
+    CI secrets. So this folder is extracted from `origin/<base>` into `workdir`.
+    "A PR cannot change how it is reviewed": a config change only applies once
+    merged.
 
-    Config hors du dépôt (dépôt de config externe, `config/projects/` du moteur) : rien à
-    faire. `REVIEWME_CONFIG_FROM_BASE=0` désactive (déconseillé ; jamais lu du `.env` d'une
-    instance). Lève ProjectConfigError si la config est introuvable sur la base : on ne
-    retombe PAS sur celle de la PR.
+    Config outside the repo (external config repo, the engine's `config/projects/`):
+    nothing to do. `REVIEWME_CONFIG_FROM_BASE=0` disables it (not recommended; never read
+    from an instance's `.env`). Raises ProjectConfigError if the config cannot be found on
+    the base: we do NOT fall back to the PR's.
     """
     import dataclasses
     import io
@@ -200,12 +200,12 @@ def config_from_base(config: Config, base_ref: str | None, workdir: str,
     home = (config.config_home or os.environ.get("REVIEWME_CONFIG_HOME", "")).strip()
     if not home:
         return config
-    # Chemins comparés SANS résoudre les liens : un `.reviewme` remplacé par un lien vers
-    # l'extérieur ne doit pas passer pour un dépôt de config externe (lu depuis la PR).
+    # Paths compared WITHOUT resolving links: a `.reviewme` replaced by a link to the
+    # outside must not pass for an external config repo (read from the PR).
     repo = os.path.abspath(os.path.expanduser(config.repo_path))
     cible = os.path.abspath(os.path.expanduser(home))
     if os.path.commonpath([repo, cible]) != repo:
-        return config                       # dépôt de config externe : déjà hors de la PR
+        return config                       # external config repo: already outside the PR
     rel = Path(os.path.relpath(cible, repo)).as_posix()
     if not base_ref:
         raise ProjectConfigError("unknown base branch: cannot read the config "
@@ -233,13 +233,13 @@ def config_from_base(config: Config, base_ref: str | None, workdir: str,
     if not (Path(workdir) / rel).is_dir():
         raise ProjectConfigError(f"`{rel}` empty in the archive of origin/{base_ref} "
                                  f"(export-ignore?)")
-    logger.info("Config lue sur origin/%s (`%s`), pas sur la PR", base_ref, rel)
+    logger.info("Config read from origin/%s (`%s`), not from the PR", base_ref, rel)
     return dataclasses.replace(config, config_home=str(Path(workdir) / rel))
 
 
 def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logger,
                *, force: bool = False) -> dict:
-    """Review une PR (dict complet de l'API GitHub). Renvoie un dict de compteurs."""
+    """Reviews a PR (full GitHub API dict). Returns a dict of counters."""
     import tempfile
     with tempfile.TemporaryDirectory(prefix="reviewme-config-") as workdir:
         return _run_review(pr, config, gh, logger, force=force, workdir=workdir)
@@ -253,36 +253,36 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
     author = pr.get("user", {}).get("login", "")
 
     if not force and is_reviewed(pr_number, head_sha):
-        logger.info("PR #%s déjà reviewée à %s, skip", pr_number, head_sha[:8])
+        logger.info("PR #%s already reviewed at %s, skip", pr_number, head_sha[:8])
         return {"skipped": True}
 
-    logger.info("Review PR #%s : %s", pr_number, title,
+    logger.info("Review PR #%s: %s", pr_number, title,
                 extra={"pr_number": pr_number, "pr_title": title, "status": "started"})
 
     try:
-        # Contexte : fetch best-effort de la branche de base, pour que l'agent puisse
-        # comparer avec `git log/diff`. VRAIMENT best-effort : sur un clone CI peu profond
-        # ou un gros dépôt, ce fetch peut traîner ou échouer — il ne doit jamais faire
-        # tomber la review, qui n'en dépend pas. `FETCH_BASE_TIMEOUT=0` le désactive.
+        # Context: best-effort fetch of the base branch, so the agent can compare with
+        # `git log/diff`. TRULY best-effort: on a shallow CI clone or a large repo, this
+        # fetch can drag on or fail — it must never bring down the review, which does not
+        # depend on it. `FETCH_BASE_TIMEOUT=0` disables it.
         base_ref = pr.get("base", {}).get("ref")
         fetch_timeout = int(os.environ.get("FETCH_BASE_TIMEOUT", "30"))
         if base_ref and fetch_timeout > 0:
             try:
-                # Refspec explicite : sur un clone CI à branche unique, `git fetch origin
-                # <base>` ne met à jour que FETCH_HEAD, et `origin/<base>` resterait absent.
+                # Explicit refspec: on a single-branch CI clone, `git fetch origin <base>`
+                # only updates FETCH_HEAD, and `origin/<base>` would remain missing.
                 subprocess.run(["git", "fetch", "origin",
                                 f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}",
                                 "--quiet", "--depth", "50"],
                                cwd=config.repo_path, capture_output=True,
                                timeout=fetch_timeout, check=False)
             except (subprocess.TimeoutExpired, OSError) as e:
-                logger.info("PR #%s : fetch de '%s' abandonné (%s) — la review continue "
-                            "sans l'historique de la branche de base",
+                logger.info("PR #%s: fetch of '%s' abandoned (%s) — the review continues "
+                            "without the base branch history",
                             pr_number, base_ref, type(e).__name__)
 
         diff = gh.get_pr_diff(pr_number)
         if not diff.strip():
-            logger.warning("PR #%s : diff vide, skip", pr_number)
+            logger.warning("PR #%s: empty diff, skip", pr_number)
             return {"skipped": True, "reason": "empty_diff"}
 
         diff_size_kb = len(diff.encode("utf-8")) / 1024
@@ -296,7 +296,7 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
             logger.error("Invalid project config: %s", e)
             return {"error": f"project config: {e}"}
 
-        # --- Sélection des reviewers (D4) ---
+        # --- Reviewer selection (D4) ---
         files = gh.get_pr_files(pr_number)
         changed_paths = [f.get("filename", "") for f in files]
         context, available = _gather_context(pr, config, logger)
@@ -304,18 +304,18 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         for spec, reason in skipped:
             logger.info("PR #%s: reviewer '%s' not triggered (%s)", pr_number, spec.id, reason)
         if not selected:
-            logger.warning("PR #%s : aucun reviewer déclenché, rien à faire", pr_number)
+            logger.warning("PR #%s: no reviewer triggered, nothing to do", pr_number)
             return {"skipped": True, "reason": "no_reviewer_triggered"}
 
-        logger.info("PR #%s : diff %.1f KB, projet=%s, reviewers=%s",
+        logger.info("PR #%s: diff %.1f KB, project=%s, reviewers=%s",
                     pr_number, diff_size_kb, project.name, [s.id for s in selected])
 
-        # Conventions et instructions du dépôt : lues sur la branche de base, pas sur la PR
-        # (cf. `repo_context.RepoReader`), sauf si la lecture sur la base est désactivée.
+        # Repo conventions and instructions: read from the base branch, not from the PR
+        # (see `repo_context.RepoReader`), unless reading from the base is disabled.
         from .repo_context import RepoReader
         reader = RepoReader(config.repo_path, base_ref if config.config_from_base else None)
 
-        # --- Exécution parallèle (D5) : chaque reviewer est un subprocess indépendant ---
+        # --- Parallel execution (D5): each reviewer is an independent subprocess ---
         engagement: dict = {}
         historique = build_history_context(gh, pr_number, logger, engagement)
 
@@ -332,21 +332,21 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                     try:
                         outcomes.append(fut.result())
                     except Exception as e:
-                        logger.error("PR #%s : reviewer en échec : %s", pr_number, e)
+                        logger.error("PR #%s: reviewer failed: %s", pr_number, e)
 
         if not outcomes:
-            return {"error": "tous les reviewers ont échoué"}
+            return {"error": "all reviewers failed"}
 
-        # --- Coût de la PR (D8) : budget appliqué PAR reviewer (--max-budget-usd) ; ici on
-        # totalise et on alerte au dépassement du plafond PR (pas d'arrêt : les reviewers ont
-        # déjà tourné en parallèle).
+        # --- PR cost (D8): budget applied PER reviewer (--max-budget-usd); here we total
+        # it and warn when the PR cap is exceeded (no stop: the reviewers have already run
+        # in parallel).
         total_cost = sum(r.metadata.get("cost_usd", 0) for _, r in outcomes)
         pr_budget = config.max_budget_usd * max(len(outcomes), 1)
         if total_cost > pr_budget:
-            logger.warning("PR #%s : coût total $%.2f au-dessus du plafond attendu $%.2f",
+            logger.warning("PR #%s: total cost $%.2f above the expected cap $%.2f",
                            pr_number, total_cost, pr_budget)
 
-        # --- Préparation (sans écriture), puis UN SEUL point d'écriture (D5) ---
+        # --- Preparation (no writes), then a SINGLE write point (D5) ---
         needs_globals = any(s.output_mode == "global" for s, _ in outcomes)
         ctx = load_pr_context(gh, pr_number, with_globals=needs_globals)
         if not config.baseline:
@@ -357,19 +357,19 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                     output_mode=spec.output_mode,
                     prefix=f"[{spec.id.upper()}]" if multi else "",
                     silent_when_clean=spec.silent_when_clean,
-                    # Seul un relecteur de conseils (`findings = false`) affiche des
-                    # conseils : ailleurs, ils feraient doublon avec lui.
+                    # Only an advice reviewer (`findings = false`) shows advice:
+                    # elsewhere, it would duplicate it.
                     advice=not spec.findings and not config.baseline,
                     language=spec.language)
             for spec, result in outcomes
         ]
-        # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après
-        # `post_all`, qui fixe les sorts `capped` et les ids des commentaires postés ; et
-        # même si `post_all` échoue, pour que le run (et son coût) reste mesurable.
+        # Ledger: each finding with its fate, posted or not (see `ledger.py`). After
+        # `post_all`, which sets the `capped` fates and the ids of posted comments; and
+        # even if `post_all` fails, so the run (and its cost) stays measurable.
         #
-        # Le devenir des remarques (👍/👎, réponses) n'est PAS relevé ici : ce serait des
-        # centaines d'appels API sur le chemin critique de chaque push. C'est le travail du
-        # job de nuit (`reviewme enrich`).
+        # What happens to comments afterwards (👍/👎, replies) is NOT collected here: that
+        # would be hundreds of API calls on the critical path of every push. That is the
+        # nightly job's work (`reviewme enrich`).
         from .ledger import record as enregistrer_registre
         try:
             counts = post_all(pr, config, gh, prepared, logger)
@@ -398,19 +398,19 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
             "output_tokens": sum(r.metadata.get("output_tokens", 0) for _, r in outcomes),
         })
 
-        # Compteurs agrégés, sans contenu : transportables par un cache de CI.
+        # Aggregated counters, without content: transportable through a CI cache.
         #
-        # JAMAIS en mode simulé : les findings sont fabriqués et le coût est nul. Les
-        # enregistrer gonflerait « remarques postées » et le nombre de runs tout en laissant
-        # le coût inchangé — donc un ROI faussé, dans le sens flatteur, par des données qui
-        # ne mesurent rien. Un DRY-RUN, lui, reste comptabilisé : ses findings sont réels.
+        # NEVER in fake mode: findings are fabricated and the cost is zero. Recording them
+        # would inflate "posted comments" and the run count while leaving the cost
+        # unchanged — hence a skewed ROI, in the flattering direction, from data that
+        # measures nothing. A DRY-RUN, however, is still counted: its findings are real.
         if config.fake:
-            logger.info("PR #%s : mode simulé, statistiques NON enregistrées "
-                        "(findings fabriqués, coût nul)", pr_number)
+            logger.info("PR #%s: fake mode, statistics NOT recorded "
+                        "(fabricated findings, zero cost)", pr_number)
         elif config.baseline:
-            # Le témoin a son registre (variant `baseline`) ; il ne doit pas doubler les
-            # compteurs d'exploitation de la chaîne réelle.
-            logger.info("PR #%s : chaîne témoin, statistiques d'exploitation NON enregistrées",
+            # The baseline has its own ledger (variant `baseline`); it must not double the
+            # operational counters of the real pipeline.
+            logger.info("PR #%s: baseline pipeline, operational statistics NOT recorded",
                         pr_number)
         else:
             enregistrer_stats(pr_number, head_sha, author, project.name,
@@ -419,20 +419,20 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
 
         if not config.dry_run:
             mark_reviewed(pr_number, head_sha, title, status="success")
-        logger.info("PR #%s : terminé %s", pr_number, counts,
+        logger.info("PR #%s: done %s", pr_number, counts,
                     extra={"pr_number": pr_number, "pr_title": title, "status": "success"})
         return counts
 
     except Exception as e:
         mark_error(pr_number, head_sha, title, str(e))
-        logger.error("PR #%s : échec review : %s", pr_number, e,
+        logger.error("PR #%s: review failed: %s", pr_number, e,
                      extra={"pr_number": pr_number, "pr_title": title, "status": "error"})
         return {"error": str(e)}
 
 
 def run_review_by_number(pr_number: int, config: Config, logger: logging.Logger,
                          gh: GitHubClient | None = None, *, force: bool = False) -> dict:
-    """Résout une PR par son numéro puis la review (utilisé par le CLI et le webhook)."""
+    """Resolves a PR by its number then reviews it (used by the CLI and the webhook)."""
     own = gh is None
     gh = gh or GitHubClient(config)
     try:

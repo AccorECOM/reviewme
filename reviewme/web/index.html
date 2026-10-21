@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -34,7 +34,7 @@
             <div id="hof-global" class="hof-global-stats"></div>
             <div id="hof-categories" class="hof-grid"></div>
             <div id="hof-leaderboard-section" class="hof-section">
-                <h2 class="hof-section-title">Classement general</h2>
+                <h2 class="hof-section-title">Overall leaderboard</h2>
                 <div id="hof-leaderboard" class="hof-leaderboard"></div>
             </div>
         </section>
@@ -239,12 +239,12 @@
             const sel = document.getElementById('hof-sprint-select');
             if (!sprints || !sprints.length) return;
             sel.innerHTML = sprints.map(s => {
-                const label = s.is_current ? `${s.label} (en cours)` : s.label;
+                const label = s.is_current ? `${s.label} (current)` : s.label;
                 return `<option value="${s.id}" ${s.id === String(selected) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
             }).join('');
             const cur = sprints.find(s => s.id === String(selected));
             const range = document.getElementById('hof-sprint-range');
-            range.textContent = (cur && cur.id !== 'all') ? 'Classement sur la periode du sprint' : 'Classement depuis le tout debut';
+            range.textContent = (cur && cur.id !== 'all') ? 'Ranking over the sprint period' : 'Ranking since the very beginning';
         }
 
         function renderHofGlobal(total) {
@@ -254,7 +254,7 @@
                 <div class="hof-stat-row">
                     <div class="hof-big-stat">
                         <span class="hof-big-number">$${total.total_cost}</span>
-                        <span class="hof-big-label">total brule</span>
+                        <span class="hof-big-label">total burned</span>
                     </div>
                     <div class="hof-big-stat">
                         <span class="hof-big-number">${total.dev_count}</span>
@@ -270,7 +270,7 @@
                     </div>
                     <div class="hof-big-stat">
                         <span class="hof-big-number">${total.total_duration_h}h</span>
-                        <span class="hof-big-label">de reflexion IA</span>
+                        <span class="hof-big-label">of AI thinking</span>
                     </div>
                     <div class="hof-big-stat">
                         <span class="hof-big-number">${tokStr}</span>
@@ -283,7 +283,7 @@
         function renderHofCategories(categories) {
             const el = document.getElementById('hof-categories');
             if (!categories || !categories.length) {
-                el.innerHTML = '<div class="empty">Pas encore de donnees</div>';
+                el.innerHTML = '<div class="empty">No data yet</div>';
                 return;
             }
             el.innerHTML = categories.map(c => `
@@ -306,7 +306,7 @@
         function renderHofLeaderboard(devs) {
             const el = document.getElementById('hof-leaderboard');
             if (!devs || !devs.length) {
-                el.innerHTML = '<div class="empty">Pas de donnees</div>';
+                el.innerHTML = '<div class="empty">No data</div>';
                 return;
             }
             el.innerHTML = `
@@ -318,9 +318,9 @@
                     <span class="hof-lb-h-stat">Reviews</span>
                     <span class="hof-lb-h-stat">Avg/PR</span>
                     <span class="hof-lb-h-stat">x/PR</span>
-                    <span class="hof-lb-h-stat">Diff moy.</span>
+                    <span class="hof-lb-h-stat">Avg diff</span>
                     <span class="hof-lb-h-stat">Tokens</span>
-                    <span class="hof-lb-h-worst">Pire PR</span>
+                    <span class="hof-lb-h-worst">Worst PR</span>
                 </div>
             ` + devs.map((d, i) => `
                 <div class="hof-lb-row ${i === 0 ? 'hof-lb-row--first' : ''}">

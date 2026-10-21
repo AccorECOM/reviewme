@@ -1,21 +1,21 @@
-"""Authentification GitHub : PAT statique ou **GitHub App** (identité dédiée).
+"""GitHub authentication: static PAT or **GitHub App** (dedicated identity).
 
-Pourquoi une App : un PAT commente sous l'identité d'un humain (les reviews arrivent « de
-Joey »), ne survit pas au départ de cette personne, et ne permet pas un `REQUEST_CHANGES`
-crédible. Une App a son propre login `<slug>[bot]`, ses permissions explicites, et un
-token d'installation à durée de vie courte (1 h) — donc plus sûr qu'un PAT longue durée.
+Why an App: a PAT comments under a human's identity (reviews come "from Joey"), does not
+survive that person leaving, and does not allow a credible `REQUEST_CHANGES`. An App has
+its own `<slug>[bot]` login, explicit permissions, and a short-lived installation token
+(1 h) — hence safer than a long-lived PAT.
 
-Chaîne d'auth d'une App : clé privée -> JWT RS256 (10 min) -> échange contre un token
-d'installation (1 h) -> `Authorization: Bearer <token>`. Le token étant court, il est
-rafraîchi automatiquement : le mode `poll`, qui tourne en continu, le traverserait sinon
-avec un 401 au bout d'une heure.
+App auth chain: private key -> JWT RS256 (10 min) -> exchanged for an installation token
+(1 h) -> `Authorization: Bearer <token>`. Since the token is short-lived, it is refreshed
+automatically: `poll` mode, which runs continuously, would otherwise hit a 401 after an
+hour.
 
-Variables d'environnement :
-    GITHUB_APP_ID               identifiant numérique de l'App
-    GITHUB_APP_PRIVATE_KEY_PATH chemin du fichier .pem (jamais la clé en clair dans le .env)
-    GITHUB_APP_INSTALLATION_ID  optionnel — sinon résolu depuis le repo cible
-Si elles sont absentes, on retombe sur `GITHUB_TOKEN` (PAT) : rien ne change pour
-l'existant.
+Environment variables:
+    GITHUB_APP_ID               numeric App identifier
+    GITHUB_APP_PRIVATE_KEY_PATH path to the .pem file (never the key in clear in .env)
+    GITHUB_APP_INSTALLATION_ID  optional — otherwise resolved from the target repo
+If they are absent, we fall back to `GITHUB_TOKEN` (PAT): nothing changes for existing
+setups.
 """
 from __future__ import annotations
 
@@ -26,17 +26,17 @@ from pathlib import Path
 import httpx
 
 API_BASE = "https://api.github.com"
-_JWT_TTL_S = 540           # 9 min (GitHub plafonne à 10)
-_REFRESH_MARGIN_S = 300    # on renouvelle 5 min avant expiration
+_JWT_TTL_S = 540           # 9 min (GitHub caps at 10)
+_REFRESH_MARGIN_S = 300    # renew 5 min before expiry
 _TIMEOUT_S = 15.0
 
 
 class GitHubAuthError(RuntimeError):
-    """Auth impossible : configuration incomplète, clé illisible, installation absente."""
+    """Auth impossible: incomplete configuration, unreadable key, missing installation."""
 
 
 class TokenProvider:
-    """Fournit le token courant. Implémentation statique (PAT) par défaut."""
+    """Provides the current token. Static (PAT) implementation by default."""
 
     def __init__(self, token: str) -> None:
         self._token = token
@@ -56,7 +56,7 @@ class _Installation:
 
 
 class AppTokenProvider(TokenProvider):
-    """Token d'installation d'une GitHub App, renouvelé automatiquement."""
+    """GitHub App installation token, renewed automatically."""
 
     def __init__(self, app_id: str, private_key_path: str, repo: str,
                  installation_id: str = "") -> None:
@@ -67,17 +67,17 @@ class AppTokenProvider(TokenProvider):
 
         key_file = Path(private_key_path).expanduser()
         if not key_file.exists():
-            raise GitHubAuthError(f"clé privée de la GitHub App introuvable : {key_file}")
+            raise GitHubAuthError(f"GitHub App private key not found: {key_file}")
         self._private_key = key_file.read_text(encoding="utf-8")
 
-    # ---------------------------------------------------------------- interne
+    # ---------------------------------------------------------------- internal
     def _jwt(self) -> str:
         try:
             import jwt  # PyJWT[crypto]
-        except ImportError as e:  # pragma: no cover - dépend de l'install
+        except ImportError as e:  # pragma: no cover - depends on the install
             raise GitHubAuthError(
-                "PyJWT manquant pour l'auth GitHub App. Installer : uv add 'pyjwt[crypto]' "
-                "(ou `uv sync --extra github-app`)."
+                "PyJWT missing for GitHub App auth. Install: uv add 'pyjwt[crypto]' "
+                "(or `uv sync --extra github-app`)."
             ) from e
 
         now = int(time.time())
@@ -85,7 +85,7 @@ class AppTokenProvider(TokenProvider):
         try:
             return jwt.encode(payload, self._private_key, algorithm="RS256")
         except Exception as e:
-            raise GitHubAuthError(f"signature du JWT impossible (clé .pem invalide ?) : {e}") from e
+            raise GitHubAuthError(f"cannot sign the JWT (invalid .pem key?): {e}") from e
 
     def _headers(self, bearer: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {bearer}",
@@ -93,18 +93,18 @@ class AppTokenProvider(TokenProvider):
                 "X-GitHub-Api-Version": "2022-11-28"}
 
     def _resolve_installation_id(self, app_jwt: str) -> str:
-        """Installation de l'App sur le repo cible (évite d'avoir à la configurer à la main)."""
+        """The App's installation on the target repo (avoids having to configure it by hand)."""
         if not self._repo or "/" not in self._repo:
             raise GitHubAuthError(
-                "GITHUB_APP_INSTALLATION_ID absent et repo inconnu : impossible de résoudre "
-                "l'installation.")
+                "GITHUB_APP_INSTALLATION_ID missing and repo unknown: cannot resolve "
+                "the installation.")
         resp = httpx.get(f"{API_BASE}/repos/{self._repo}/installation",
                          headers=self._headers(app_jwt), timeout=_TIMEOUT_S)
         if resp.status_code == 404:
             raise GitHubAuthError(
-                f"l'App n'est pas installée sur {self._repo} (ou n'y a pas accès).")
+                f"the App is not installed on {self._repo} (or has no access to it).")
         if resp.status_code >= 400:
-            raise GitHubAuthError(f"résolution de l'installation : HTTP {resp.status_code}")
+            raise GitHubAuthError(f"installation resolution: HTTP {resp.status_code}")
         return str(resp.json().get("id", ""))
 
     def _mint(self) -> _Installation:
@@ -116,10 +116,10 @@ class AppTokenProvider(TokenProvider):
             f"{API_BASE}/app/installations/{self._installation_id}/access_tokens",
             headers=self._headers(app_jwt), timeout=_TIMEOUT_S)
         if resp.status_code == 401:
-            raise GitHubAuthError("JWT refusé : vérifier GITHUB_APP_ID et la clé privée.")
+            raise GitHubAuthError("JWT rejected: check GITHUB_APP_ID and the private key.")
         if resp.status_code >= 400:
             raise GitHubAuthError(
-                f"création du token d'installation : HTTP {resp.status_code} — {resp.text[:200]}")
+                f"installation token creation: HTTP {resp.status_code} — {resp.text[:200]}")
 
         data = resp.json()
         expires = data.get("expires_at", "")
@@ -141,7 +141,7 @@ class AppTokenProvider(TokenProvider):
         return True
 
     def bot_login(self) -> str:
-        """Login du bot (`<slug>[bot]`), utile pour reconnaître ses propres commentaires."""
+        """The bot's login (`<slug>[bot]`), useful to recognize its own comments."""
         resp = httpx.get(f"{API_BASE}/app", headers=self._headers(self._jwt()), timeout=_TIMEOUT_S)
         if resp.status_code >= 400:
             return ""
@@ -150,7 +150,7 @@ class AppTokenProvider(TokenProvider):
 
 
 def build_provider(config) -> TokenProvider:
-    """PAT par défaut ; GitHub App dès que `GITHUB_APP_ID` et la clé privée sont fournis."""
+    """PAT by default; GitHub App as soon as `GITHUB_APP_ID` and the private key are provided."""
     if config.github_app_id and config.github_app_private_key_path:
         return AppTokenProvider(
             app_id=config.github_app_id,
@@ -160,6 +160,6 @@ def build_provider(config) -> TokenProvider:
         )
     if not config.github_token:
         raise GitHubAuthError(
-            "aucune authentification : définir GITHUB_TOKEN (PAT) ou GITHUB_APP_ID + "
+            "no authentication: set GITHUB_TOKEN (PAT) or GITHUB_APP_ID + "
             "GITHUB_APP_PRIVATE_KEY_PATH (GitHub App).")
     return TokenProvider(config.github_token)

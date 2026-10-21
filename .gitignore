@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 
-# --- Données de review (contenu interne, PR réelles) : hors dépôt / hors OSS ---
+# --- Review data (internal content, real PRs): never in the repository ---
 data/
 *.diff
 
@@ -27,7 +27,7 @@ venv/
 /tmp/
 node_modules/
 
-# --- Outillage local, hors périmètre du moteur ---
+# --- Local tooling, outside the engine scope ---
 .claude/skills/
 .claude/settings.local.json
 _bmad/
@@ -35,7 +35,7 @@ _bmad-output/
 .superset/
 archive/
 
-# --- Hors dépôt public : spécifique à une organisation ou à une machine ---
+# --- Not in the public repository: specific to an organisation or a machine ---
 .claude/
 docs/archive/
 config/guidelines/ios/

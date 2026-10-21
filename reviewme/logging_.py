@@ -1,4 +1,4 @@
-"""Logs : JSON structuré (fichier) + lisible (console)."""
+"""Logs: structured JSON (file) + human-readable (console)."""
 from __future__ import annotations
 
 import json
@@ -32,7 +32,7 @@ def setup_logging(name: str = "reviewme") -> logging.Logger:
     _ensure_dirs()
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
-    if logger.handlers:  # idempotent (évite les doublons de handlers)
+    if logger.handlers:  # idempotent (avoids duplicate handlers)
         return logger
 
     fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
@@ -46,7 +46,7 @@ def setup_logging(name: str = "reviewme") -> logging.Logger:
 
 
 def save_review(pr_number: int, review_data: dict) -> Path:
-    """Sauvegarde une review individuelle en JSON local (data/reviews/)."""
+    """Save a single review as local JSON (data/reviews/)."""
     _ensure_dirs()
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     filepath = REVIEWS_DIR / f"pr_{pr_number}_{ts}.json"

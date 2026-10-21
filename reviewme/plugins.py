@@ -1,20 +1,20 @@
-"""Plugins Claude Code requis par un reviewer.
+"""Claude Code plugins required by a reviewer.
 
-Un plugin apporte des skills et des agents que le moteur de review peut mobiliser pendant
-son analyse. Un reviewer déclare ce dont il a besoin, le core l'installe avant de lancer la
-review :
+A plugin brings skills and agents that the review engine can use during its analysis.
+A reviewer declares what it needs, and the core installs it before launching the
+review:
 
     [plugins]
-    marketplaces = ["owner/marketplace-repo"]   # ajoutés d'abord
-    install      = ["mon-plugin"]               # ou "mon-plugin@marketplace"
+    marketplaces = ["owner/marketplace-repo"]   # added first
+    install      = ["mon-plugin"]               # or "mon-plugin@marketplace"
 
-Idempotent : ce qui est déjà installé n'est pas réinstallé (une review ne doit pas payer
-une résolution réseau à chaque PR).
+Idempotent: what is already installed is not reinstalled (a review should not pay for a
+network resolution on every PR).
 
-⚠️ SÉCURITÉ : installer un plugin, c'est faire tourner du **code tiers** dans l'environnement
-de review, aux côtés des secrets du job. Un plugin se relit comme du code (même règle que
-les prechecks). Le core continue d'imposer son allowlist d'outils : un skill de plugin ne
-peut pas s'accorder plus de droits que le reviewer lui-même.
+⚠️ SECURITY: installing a plugin means running **third-party code** in the review
+environment, alongside the job's secrets. A plugin must be reviewed like code (same rule
+as prechecks). The core still enforces its tool allowlist: a plugin skill cannot grant
+itself more rights than the reviewer itself.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _TIMEOUT_S = 180
 
 
 class PluginError(RuntimeError):
-    """Installation impossible : le reviewer qui l'exige ne peut pas tourner correctement."""
+    """Installation impossible: the reviewer that requires it cannot run properly."""
 
 
 def _run(cli: str, args: list[str], logger: logging.Logger) -> tuple[int, str]:
@@ -33,16 +33,16 @@ def _run(cli: str, args: list[str], logger: logging.Logger) -> tuple[int, str]:
         proc = subprocess.run([cli, "plugin", *args], capture_output=True, text=True,
                               timeout=_TIMEOUT_S, check=False)
     except subprocess.TimeoutExpired:
-        return 1, f"timeout après {_TIMEOUT_S}s"
+        return 1, f"timeout after {_TIMEOUT_S}s"
     except OSError as e:
         return 1, str(e)
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
 def installed_plugins(cli: str, logger: logging.Logger) -> set[str]:
-    """Noms des plugins déjà installés, sans leur suffixe `@marketplace`.
+    """Names of already-installed plugins, without their `@marketplace` suffix.
 
-    Sortie de `claude plugin list` :
+    Output of `claude plugin list`:
 
         Installed plugins:
 
@@ -50,12 +50,12 @@ def installed_plugins(cli: str, logger: logging.Logger) -> set[str]:
             Version: unknown
             Scope: user
 
-    Les lignes de détail (`Version:`, `Scope:`) sont ignorées ; seules comptent celles qui
-    portent un identifiant `nom@marketplace`.
+    Detail lines (`Version:`, `Scope:`) are ignored; only those carrying a
+    `name@marketplace` identifier count.
     """
     code, out = _run(cli, ["list"], logger)
     if code != 0:
-        logger.info("`plugin list` indisponible : on tentera l'installation sans court-circuit")
+        logger.info("`plugin list` unavailable: installation will be attempted without short-circuit")
         return set()
 
     names: set[str] = set()
@@ -68,20 +68,20 @@ def installed_plugins(cli: str, logger: logging.Logger) -> set[str]:
 
 
 def ensure_plugins(spec, cli: str, logger: logging.Logger) -> None:
-    """Installe ce que le reviewer déclare. Lève PluginError si c'est impossible.
+    """Install what the reviewer declares. Raises PluginError if impossible.
 
-    L'appelant traite l'échec comme « ce reviewer ne peut pas tourner » — pas comme un échec
-    de toute la review : les autres reviewers restent utiles.
+    The caller treats the failure as "this reviewer cannot run" — not as a failure of the
+    whole review: the other reviewers remain useful.
     """
     if not (spec.plugins_marketplaces or spec.plugins_install):
         return
 
     for source in spec.plugins_marketplaces:
         code, out = _run(cli, ["marketplace", "add", source], logger)
-        # Déjà ajouté = succès : l'opération doit rester rejouable à chaque review.
+        # Already added = success: the operation must stay replayable on every review.
         if code != 0 and "already" not in out.lower():
-            raise PluginError(f"marketplace '{source}' non ajouté : {out.strip()[:200]}")
-        logger.info("[%s] marketplace prêt : %s", spec.id, source)
+            raise PluginError(f"marketplace '{source}' not added: {out.strip()[:200]}")
+        logger.info("[%s] marketplace ready: %s", spec.id, source)
 
     if not spec.plugins_install:
         return
@@ -90,9 +90,9 @@ def ensure_plugins(spec, cli: str, logger: logging.Logger) -> None:
     for plugin in spec.plugins_install:
         short = plugin.split("@")[0]
         if short in already:
-            logger.info("[%s] plugin déjà installé : %s", spec.id, short)
+            logger.info("[%s] plugin already installed: %s", spec.id, short)
             continue
         code, out = _run(cli, ["install", plugin], logger)
         if code != 0 and "already" not in out.lower():
-            raise PluginError(f"plugin '{plugin}' non installé : {out.strip()[:200]}")
-        logger.info("[%s] plugin installé : %s", spec.id, plugin)
+            raise PluginError(f"plugin '{plugin}' not installed: {out.strip()[:200]}")
+        logger.info("[%s] plugin installed: %s", spec.id, plugin)

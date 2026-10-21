@@ -1,19 +1,19 @@
-"""Bloc « qualité » : ce que valent les remarques, à partir du registre enrichi.
+"""The "quality" block: what the findings are worth, from the enriched ledger.
 
-`stats.py` répond à « combien et pour quel coût ». Ce module répond à « est-ce utile » :
+`stats.py` answers "how many and at what cost". This module answers "is it useful":
 
-- **précision approchée** par reviewer et par `rule_id` : part des remarques postées
-  suivies d'effet (la ligne a disparu), approuvées (👍, ou réponse sans contestation),
-  contestées (👎, ou réponse « faux positif » / « voulu ») ;
-- **calibration** par tranche de confiance : la même chose, pour dire si le seuil coûtait
-  du rappel ;
-- **manqués approchés** : commentaires humains là où le bot s'est tu, ou s'est auto-censuré ;
-- **témoin contre live** sur les mêmes PR ;
-- **coût et durée** par PR et par reviewer.
+- **approximate precision** per reviewer and per `rule_id`: share of posted findings
+  acted upon (the line disappeared), approved (👍, or a reply without contest),
+  contested (👎, or a "false positive" / "intended" reply);
+- **calibration** per confidence band: the same, to tell whether the threshold cost
+  recall;
+- **approximate misses**: human comments where the bot stayed silent, or self-censored;
+- **baseline vs live** on the same PRs;
+- **cost and duration** per PR and per reviewer.
 
-Calcul pur sur des listes de dictionnaires : aucun appel réseau, aucune écriture.
-Les runs `dry_run` comptent pour la calibration (leurs findings sont réels) mais pas pour
-la précision (rien n'a été posté, donc rien n'a pu être suivi).
+Pure computation on lists of dicts: no network call, no write.
+`dry_run` runs count for calibration (their findings are real) but not for precision
+(nothing was posted, so nothing could be acted upon).
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 BANDS = ((0, 50), (51, 70), (71, 85), (86, 100))
-CONTESTED_RULE_MIN = 3       # à partir de 3 contestations, une règle est à revoir
+CONTESTED_RULE_MIN = 3       # from 3 contests on, a rule needs revisiting
 
 
 def band(confidence: int) -> str:
@@ -32,7 +32,7 @@ def band(confidence: int) -> str:
 
 
 def latest(rows: list[dict], key: str) -> dict:
-    """Dernière ligne par clé (les fichiers sont en ajout seul : la plus récente fait foi)."""
+    """Last row per key (files are append-only: the most recent one wins)."""
     out: dict = {}
     for r in rows:
         if r.get(key) is not None:
@@ -41,7 +41,7 @@ def latest(rows: list[dict], key: str) -> dict:
 
 
 def _verdict(e: dict | None) -> dict:
-    """Ce qu'il est advenu d'UNE remarque postée, en quatre booléens."""
+    """What became of ONE posted finding, as four booleans."""
     e = e or {}
     reactions = Counter(r.get("content") for r in e.get("reactions", []))
     replies = e.get("replies", [])
@@ -49,8 +49,8 @@ def _verdict(e: dict | None) -> dict:
     fixed_reply = any(r.get("label") == "fixed" for r in replies)
     return {
         "followed": bool(e.get("fingerprint_gone_at")) or fixed_reply,
-        # Approuvée = signal POSITIF explicite (👍 ou « corrigé ») ; une question ou une
-        # réponse neutre n'approuve rien.
+        # Approved = explicit POSITIVE signal (👍 or "fixed"); a question or a neutral
+        # reply approves nothing.
         "approved": (reactions["+1"] > 0 or fixed_reply) and not contested,
         "contested": contested,
         "answered": bool(replies) or bool(reactions),
@@ -75,9 +75,9 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
     last_enrich = latest(enrich, "comment_id")
     last_pr = latest(prs, "pr")
 
-    # Une remarque postée EN LIGNE = un comment_id ; on garde sa première apparition. Les
-    # findings délivrés dans un commentaire global (mode `global`, repli 422) n'ont pas de
-    # ligne à suivre : comptés à part, jamais dans le dénominateur de précision.
+    # A finding posted INLINE = one comment_id; we keep its first appearance. Findings
+    # delivered in a global comment (`global` mode, 422 fallback) have no line to track:
+    # counted separately, never in the precision denominator.
     posted: dict = {}
     in_summary = 0
     for f in live:
@@ -89,8 +89,8 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
             posted.setdefault(f["comment_id"], f)
     judged = [{**f, **_verdict(last_enrich.get(cid))} for cid, f in posted.items()]
 
-    # Calibration : chaque finding UNE fois — sa première apparition sur la PR. Sans ça,
-    # un finding re-produit à chaque push pèserait autant de fois qu'il y a de commits.
+    # Calibration: each finding ONCE — its first appearance on the PR. Otherwise a finding
+    # reproduced on every push would weigh as many times as there are commits.
     first_seen: dict = {}
     for f in sorted(live, key=lambda f: f.get("ts", "")):
         key = (f.get("pr"), f.get("reviewer"),
@@ -108,12 +108,12 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
         by_band[band(j.get("confidence", 0))].append(j)
         by_severity[j.get("severity") or "?"].append(j)
 
-    # Calibration : TOUS les findings live (postés ou non), par tranche et par sort.
+    # Calibration: ALL live findings (posted or not), per band and per fate.
     calibration = {}
     for lo, hi in BANDS:
         key = f"{lo}-{hi}"
         in_band = [f for f in unique if band(f.get("confidence", 0)) == key]
-        # En dry-run, « posted » veut dire « aurait été posté » : on le dit.
+        # In dry-run, "posted" means "would have been posted": say so.
         fates = Counter("would_post" if f.get("dry_run") and f.get("fate") == "posted"
                         else f.get("fate") for f in in_band)
         calibration[key] = {"findings": len(in_band), "fates": dict(fates),
@@ -138,7 +138,7 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
                                    for p in last_pr.values()),
     }
 
-    # Coût et durée : par PR (toutes variantes séparées) et par reviewer.
+    # Cost and duration: per PR (each variant separate) and per reviewer.
     cost_pr: dict = defaultdict(lambda: {"cost_usd": 0.0, "duration_s": 0.0, "turns": 0,
                                          "runs": 0, "diff_lines": 0})
     cost_reviewer: dict = defaultdict(lambda: {"cost_usd": 0.0, "duration_s": 0.0,
@@ -159,8 +159,8 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
     for d in (*cost_pr.values(), *cost_reviewer.values()):
         d["cost_usd"] = round(d["cost_usd"], 4)
 
-    # Témoin contre live : mêmes (PR, commit), par reviewer — combien chacun aurait posté,
-    # et combien de remarques ne sont que d'un côté (par empreinte).
+    # Baseline vs live: same (PR, commit), per reviewer — how many each would have posted,
+    # and how many findings are only on one side (by fingerprint).
     def would_post(variant: str) -> dict:
         out: dict = defaultdict(set)
         for f in findings:
@@ -206,5 +206,5 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
         "cost_by_reviewer": dict(cost_reviewer),
         "baseline_vs_live": baseline_vs_live,
         "weekly": {k: _tally(v) for k, v in sorted(weekly.items())},
-        "_judged": judged,                 # détail pour le rapport humain, retiré à l'export
+        "_judged": judged,                 # detail for the human report, removed on export
     }

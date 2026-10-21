@@ -1,14 +1,13 @@
-"""Cache d'état local (last_reviewed_sha par PR), protégé par un verrou inter-process.
+"""Local state cache (last_reviewed_sha per PR), protected by an inter-process lock.
 
-Le read-modify-write se fait sous verrou : sans lui, plusieurs threads
-écrivaient en parallèle -> lost updates. Ici toute mutation passe par `_locked()` qui
-prend un `flock` exclusif sur data/state.lock et exécute load->modify->save en section
-critique.
+Read-modify-write happens under the lock: without it, several threads wrote in parallel
+-> lost updates. Here every mutation goes through `_locked()`, which takes an exclusive
+`flock` on data/state.lock and runs load->modify->save in a critical section.
 
-NB : ce cache reste local à une machine. La VÉRITÉ de dédup est GitHub (les commentaires
-existants portant le marqueur fingerprint, cf. reconciler.py). En multi-instance, ce
-cache n'est qu'une optimisation ; le double-post transitoire est possible et nettoyé au
-run suivant (assumé, cf. ADR D8 post-challenge).
+NB: this cache stays local to one machine. The dedup TRUTH is GitHub (existing comments
+carrying the fingerprint marker, see reconciler.py). With multiple instances, this cache
+is only an optimization; a transient double-post is possible and cleaned up on the next
+run (accepted, see ADR D8 post-challenge).
 """
 from __future__ import annotations
 
@@ -20,7 +19,7 @@ from typing import Any
 from .config import STATE_FILE, STATE_LOCK
 
 try:
-    import fcntl  # POSIX (macOS/Linux — cibles du projet)
+    import fcntl  # POSIX (macOS/Linux — project targets)
     _HAS_FCNTL = True
 except ImportError:  # pragma: no cover (Windows)
     _HAS_FCNTL = False
@@ -28,7 +27,7 @@ except ImportError:  # pragma: no cover (Windows)
 
 @contextmanager
 def _locked():
-    """Verrou exclusif inter-process autour d'une section critique."""
+    """Exclusive inter-process lock around a critical section."""
     STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
     lock_fh = open(STATE_LOCK, "w")
     try:
@@ -56,7 +55,7 @@ def _save_raw(data: dict[str, Any]) -> None:
 
 
 def is_reviewed(pr_number: int, head_sha: str) -> bool:
-    """True si CE commit de CETTE PR a déjà été reviewé avec succès."""
+    """True if THIS commit of THIS PR has already been reviewed successfully."""
     data = _load_raw()
     entry = data.get("reviewed", {}).get(str(pr_number))
     return bool(entry) and entry.get("head_sha") == head_sha
@@ -88,11 +87,11 @@ def mark_error(pr_number: int, head_sha: str, title: str, error: str) -> None:
 
 
 def failed_at(pr_number: int, head_sha: str) -> bool:
-    """True si CE commit de CETTE PR a échoué à la dernière tentative.
+    """True if THIS commit of THIS PR failed on the last attempt.
 
-    Sert au mode poll à ne PAS re-reviewer indéfiniment (et re-facturer) un commit qui
-    échoue de façon permanente (diff trop gros, budget dépassé, crash agent). Un NOUVEAU
-    commit (sha différent) n'est pas filtré → il sera bien retenté."""
+    Lets poll mode NOT re-review indefinitely (and re-bill) a commit that fails
+    permanently (diff too large, budget exceeded, agent crash). A NEW commit (different
+    sha) is not filtered → it will be retried."""
     data = _load_raw()
     entry = data.get("errors", {}).get(str(pr_number))
     return bool(entry) and entry.get("head_sha") == head_sha

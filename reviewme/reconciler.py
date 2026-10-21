@@ -1,31 +1,31 @@
-"""Réconciliateur : transforme des findings en commentaires inline, avec dédup et
-cycle de vie des threads.
+"""Reconciler: turns findings into inline comments, with dedup and thread
+lifecycle.
 
-Garanties :
-- ANTI-422 : chaque finding est validé contre le diff (`diff_utils.valid_positions`)
-  AVANT le post. Les findings hors-diff vont dans le summary, jamais en inline. Sur un
-  422 résiduel, on retombe sur un commentaire global (rien n'est perdu).
-- DÉDUP STABLE : fingerprint = sha1(path + contenu réel de la ligne), PAS le snippet
-  narré par le LLM. Même finding entre deux runs -> même marqueur -> pas de doublon.
-- IDENTITÉ PAR MARQUEUR : on ne reconnaît NOS commentaires que par le marqueur
-  `<!-- reviewme:REVIEWER:HASH -->`, jamais par l'auteur (sinon on toucherait les threads
-  humains).
-- CLOISONNEMENT PAR REVIEWER (ADR v3 D3) : la clé de dédup est le COUPLE
-  (reviewer_id, hash). Sans ça, deux reviewers qui pointent la même ligne se dédupent
-  mutuellement et le second est silencieusement avalé.
-- RÉTRO-COMPAT : les marqueurs de la v0.2 (`<!-- reviewme:HASH -->`, sans reviewer) sont
-  lus comme appartenant à `tech`, le reviewer unique de l'époque. Le HASH lui-même est
-  INCHANGÉ (le reviewer_id est un préfixe, il n'entre PAS dans le sha1) : une PR déjà
-  commentée par la v0.2 se dédupe donc normalement au premier run v3, sans salve de
-  doublons.
-- CYCLE DE VIE : si un finding persiste alors que son commentaire est devenu outdated
-  (nouveau commit), on RÉPOND dans le thread existant au lieu de dupliquer un top-level.
-- SÉCURITÉ : tout texte est scrubbé (secrets/chemins) avant post.
+Guarantees:
+- ANTI-422: each finding is validated against the diff (`diff_utils.valid_positions`)
+  BEFORE posting. Out-of-diff findings go into the summary, never inline. On a
+  residual 422, we fall back to a global comment (nothing is lost).
+- STABLE DEDUP: fingerprint = sha1(path + actual line content), NOT the snippet
+  narrated by the LLM. Same finding across two runs -> same marker -> no duplicate.
+- IDENTITY BY MARKER: we only recognise OUR comments by the marker
+  `<!-- reviewme:REVIEWER:HASH -->`, never by author (otherwise we would touch human
+  threads).
+- PER-REVIEWER ISOLATION (ADR v3 D3): the dedup key is the PAIR (reviewer_id, hash).
+  Without it, two reviewers pointing at the same line dedup each other and the second
+  is silently swallowed.
+- BACKWARD COMPAT: v0.2 markers (`<!-- reviewme:HASH -->`, without reviewer) are read
+  as belonging to `tech`, the single reviewer at the time. The HASH itself is
+  UNCHANGED (the reviewer_id is a prefix, it does NOT go into the sha1): a PR already
+  commented by v0.2 therefore dedups normally on the first v3 run, without a burst of
+  duplicates.
+- LIFECYCLE: if a finding persists while its comment has become outdated (new
+  commit), we REPLY in the existing thread instead of duplicating a top-level one.
+- SECURITY: all text is scrubbed (secrets/paths) before posting.
 
-Découpage v3 (ADR v3 D5) : `prepare()` ne fait AUCUNE écriture (calcul pur, donc
-parallélisable entre reviewers) ; `post_all()` est le SEUL point d'écriture GitHub, ce
-qui permet de partager la dédup, de tenir la limite de 80 writes/min et d'appliquer le
-plafond de commentaires par PR (D6) — impossible à calculer reviewer par reviewer.
+v3 split (ADR v3 D5): `prepare()` performs NO write (pure computation, hence
+parallelisable across reviewers); `post_all()` is the ONLY GitHub write point, which
+allows sharing the dedup, staying within the 80 writes/min limit and applying the
+per-PR comment cap (D6) — impossible to compute reviewer by reviewer.
 """
 from __future__ import annotations
 
@@ -39,61 +39,61 @@ from .diff_utils import normalize_line, resolve_line, valid_positions
 from .github_client import GitHubApiError, GitHubClient
 from .models import ReviewResult, Severity
 
-# Deux formes acceptées : `reviewme:<reviewer>:<hash>` (v3) et `reviewme:<hash>` (v0.2).
+# Two accepted forms: `reviewme:<reviewer>:<hash>` (v3) and `reviewme:<hash>` (v0.2).
 _MARKER_RE = re.compile(r"<!--\s*reviewme:(?:([a-z0-9][a-z0-9_-]{0,31}):)?([0-9a-f]{6,})\s*-->")
 
-#: Reviewer attribué aux marqueurs v0.2 dépourvus d'identifiant (cf. ADR v3 D3).
+#: Reviewer assigned to v0.2 markers lacking an identifier (see ADR v3 D3).
 LEGACY_REVIEWER_ID = "tech"
 _SEV_LABEL = {
     Severity.BLOCKER: "[BLOCKER]",
     Severity.IMPORTANT: "[IMPORTANT]",
     Severity.MINOR: "[MINOR]",
 }
-#: Ordre de priorité quand le plafond D6 oblige à couper.
+#: Priority order when the D6 cap forces a cut.
 _SEV_RANK = {Severity.BLOCKER: 0, Severity.IMPORTANT: 1, Severity.MINOR: 2}
-from .strings import ALL_SIGNATURES, t  # noqa: E402  (textes postés, dans la langue du projet)
+from .strings import ALL_SIGNATURES, t  # noqa: E402  (posted texts, in the project's language)
 
-#: Signature française historique, gardée pour la compatibilité des imports.
+#: Historical French signature, kept for import compatibility.
 _SIGNATURE = ALL_SIGNATURES[1]
-#: Verdicts de la passe de vérification qui écartent un finding (cf. `verify.py`).
+#: Verification pass verdicts that discard a finding (see `verify.py`).
 _VERIFY_DROP = frozenset({"refuted", "missing", "uncited", "invalid"})
 
 
 def fingerprint_hash(path: str, line_content: str) -> str:
-    """Hash d'ancrage d'un finding. NE DOIT PAS CHANGER sans plan de migration.
+    """Anchoring hash of a finding. MUST NOT CHANGE without a migration plan.
 
-    Volontairement INDÉPENDANT du numéro de ligne : c'est ce qui permet de ré-ancrer sans
-    doublon quand le code se déplace. Limite acceptée : deux lignes au contenu
-    normalisé identique dans un même fichier partagent le hash (rare ; le suivi fin de la 2e
-    occurrence peut être perdu). Un index par (marqueur, ligne) est une piste v2.
+    Deliberately INDEPENDENT of the line number: that is what allows re-anchoring without
+    duplicates when code moves. Accepted limitation: two lines with identical normalized
+    content in the same file share the hash (rare; fine tracking of the 2nd occurrence
+    may be lost). An index by (marker, line) is a v2 option.
 
-    Le `reviewer_id` n'entre PAS ici : il est ajouté comme préfixe du marqueur (cf.
-    `fingerprint`), ce qui rend les marqueurs v0.2 rétro-compatibles sans recalcul.
+    The `reviewer_id` does NOT go in here: it is added as a marker prefix (see
+    `fingerprint`), which keeps v0.2 markers backward-compatible without recomputation.
     """
     return hashlib.sha1(f"{path}\n{normalize_line(line_content)}".encode()).hexdigest()[:10]
 
 
 def fingerprint(path: str, line_content: str,
                 reviewer_id: str = LEGACY_REVIEWER_ID) -> str:
-    """Marqueur HTML posté dans le corps du commentaire : `<!-- reviewme:<reviewer>:<hash> -->`."""
+    """HTML marker posted in the comment body: `<!-- reviewme:<reviewer>:<hash> -->`."""
     return f"<!-- reviewme:{reviewer_id}:{fingerprint_hash(path, line_content)} -->"
 
 
 def summary_fingerprint(reviewer_id: str) -> str:
-    """Marqueur d'un commentaire GLOBAL de reviewer (mode `global`, ADR v3 D2).
+    """Marker of a reviewer's GLOBAL comment (`global` mode, ADR v3 D2).
 
-    Ancré sur le seul reviewer : il n'y a qu'un commentaire global par reviewer et par PR,
-    qu'on met à jour de commit en commit au lieu d'en empiler un nouveau à chaque fois.
+    Anchored on the reviewer alone: there is only one global comment per reviewer and per
+    PR, updated from commit to commit instead of stacking a new one each time.
     """
     h = hashlib.sha1(f"__summary__\n{reviewer_id}".encode()).hexdigest()[:10]
     return f"<!-- reviewme:{reviewer_id}:{h} -->"
 
 
 def marker_key(body: str) -> tuple[str, str] | None:
-    """(reviewer_id, hash) d'un commentaire existant, ou None s'il n'est pas de nous.
+    """(reviewer_id, hash) of an existing comment, or None if it is not ours.
 
-    Un marqueur v0.2 sans reviewer est attribué à `tech` (LEGACY_REVIEWER_ID) : c'est LA
-    règle de migration, sans elle la première review v3 reposterait tout en double.
+    A v0.2 marker without a reviewer is assigned to `tech` (LEGACY_REVIEWER_ID): it is THE
+    migration rule; without it, the first v3 review would repost everything as duplicates.
     """
     m = _MARKER_RE.search(body or "")
     if not m:
@@ -107,11 +107,11 @@ def _scrub(text: str | None) -> str:
 
 
 def _guard(text: str, logger: logging.Logger, pr_number: int) -> str:
-    """Garde-fou final : ne JAMAIS poster un texte contenant encore un secret après scrub."""
+    """Final safeguard: NEVER post a text that still contains a secret after scrubbing."""
     from .scrub import contains_secret
     if contains_secret(text):
-        logger.warning("PR #%s : secret détecté après scrub — texte masqué avant post", pr_number)
-        return "[contenu masqué — secret potentiel détecté après scrub]"
+        logger.warning("PR #%s: secret detected after scrub — text masked before posting", pr_number)
+        return "[content masked — potential secret detected after scrub]"
     return text
 
 
@@ -124,7 +124,7 @@ def _comment_body(finding, marker: str, prefix: str = "", lang: str = "en") -> s
     if getattr(finding, "preexisting", False):
         lines.append("\n" + t("moved_code_note", lang))
     if (finding.verification or {}).get("status") == "error":
-        # La vérification a échoué : la remarque passe quand même, mais le lecteur le sait.
+        # Verification failed: the comment still goes through, but the reader knows it.
         lines.append("\n" + t("unverified_note", lang))
     lines.append(f"\n{marker}")
     return "\n".join(lines)
@@ -135,12 +135,12 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
                   retained: list | None = None, unverified: int = 0,
                   minor: list | None = None, preexisting: list | None = None,
                   advice: list | None = None, lang: str = "en") -> str:
-    """Corps du résumé. `retained` : findings listés (mode global, où ils n'ont pas de
-    commentaire inline). `unverified` : findings écartés par la vérification.
+    """Summary body. `retained`: listed findings (global mode, where they have no
+    inline comment). `unverified`: findings discarded by verification.
 
-    La synthèse rédigée par le modèle décrit TOUS ses findings, y compris ceux que la
-    vérification a écartés : la poster les ferait réapparaître par la bande. Dans ce cas,
-    seuls les points retenus sont repris, en liste.
+    The synthesis written by the model describes ALL its findings, including those that
+    verification discarded: posting it would bring them back through the back door. In
+    that case, only the retained points are included, as a list.
     """
     parts = [f"## {title or t('review_title', lang)}"]
     if result.summary and not unverified:
@@ -153,7 +153,7 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} "
                          f"{_scrub(f.message)}")
     if advice:
-        # Pas des défauts : ce qu'un humain doit valider lui-même sur CETTE PR.
+        # Not defects: what a human must validate themselves on THIS PR.
         parts.append("\n" + t("advice_header", lang))
         for a in advice:
             ou = ", ".join(f"`{_scrub(p)}`" for p in a.paths)
@@ -176,7 +176,7 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
 
 
 def _degraded_body(summary_body: str, batch: list, lang: str = "en") -> str:
-    """Repli : l'inline a échoué (422 résiduel) -> tout en un commentaire global."""
+    """Fallback: inline failed (residual 422) -> everything in one global comment."""
     parts = [summary_body, "\n" + t("degraded_header", lang)]
     for c in batch:
         body = _MARKER_RE.sub("", c["body"]).strip()
@@ -185,15 +185,15 @@ def _degraded_body(summary_body: str, batch: list, lang: str = "en") -> str:
 
 
 def _api_comment(item: dict) -> dict:
-    """Ne laisse passer que les champs acceptés par l'API (les clés `_*` sont internes)."""
+    """Only lets through fields accepted by the API (`_*` keys are internal)."""
     return {k: v for k, v in item.items() if not k.startswith("_")}
 
 
-# --------------------------------------------------------------------------- contexte PR
+# --------------------------------------------------------------------------- PR context
 
 @dataclass
 class PrContext:
-    """État GitHub lu UNE SEULE FOIS et partagé par tous les reviewers d'une PR."""
+    """GitHub state read ONCE and shared by all the reviewers of a PR."""
     valid: dict
     inline_by_marker: dict[tuple[str, str], dict] = field(default_factory=dict)
     global_by_marker: dict[tuple[str, str], dict] = field(default_factory=dict)
@@ -207,7 +207,7 @@ def load_pr_context(gh: GitHubClient, pr_number: int, *, with_globals: bool = Fa
         if not mk or c.get("in_reply_to_id") is not None:
             continue
         prev = ctx.inline_by_marker.get(mk)
-        # sur collision, préférer le commentaire NON-outdated (déterministe)
+        # on collision, prefer the NON-outdated comment (deterministic)
         if prev is None or (prev.get("position") is None and c.get("position") is not None):
             ctx.inline_by_marker[mk] = c
 
@@ -220,22 +220,22 @@ def load_pr_context(gh: GitHubClient, pr_number: int, *, with_globals: bool = Fa
     return ctx
 
 
-# --------------------------------------------------------------------------- préparation
+# --------------------------------------------------------------------------- preparation
 
 @dataclass
 class PreparedReview:
-    """Résultat d'un reviewer, prêt à poster. Aucune écriture n'a encore eu lieu."""
+    """A reviewer's result, ready to post. No write has happened yet."""
     reviewer_id: str
     output_mode: str = "inline"
     summary: str = ""
     batch: list[dict] = field(default_factory=list)
     replies: list[tuple[int, str]] = field(default_factory=list)
-    global_body: str | None = None          # mode `global`, ou fallback JSON illisible
-    global_update_id: int | None = None     # commentaire global existant à mettre à jour
-    threads_resolus: set = field(default_factory=set)   # évite de répondre deux fois
+    global_body: str | None = None          # `global` mode, or unreadable JSON fallback
+    global_update_id: int | None = None     # existing global comment to update
+    threads_resolus: set = field(default_factory=set)   # avoids replying twice
     counts: dict = field(default_factory=dict)
-    findings: list = field(default_factory=list)        # tous les findings, avec leur `fate`
-    language: str = "en"                                # langue des textes postés
+    findings: list = field(default_factory=list)        # all findings, with their `fate`
+    language: str = "en"                                # language of posted texts
 
 
 def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
@@ -243,7 +243,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             output_mode: str = "inline", prefix: str = "",
             silent_when_clean: bool = False, advice: bool = False,
             language: str = "en") -> PreparedReview:
-    """Calcule ce qu'il faudrait poster pour UN reviewer. Sans effet de bord réseau."""
+    """Computes what should be posted for ONE reviewer. No network side effect."""
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]
     counts = {"posted": 0, "replied": 0, "deduped": 0, "out_of_diff": 0,
@@ -253,9 +253,9 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
     prep = PreparedReview(reviewer_id=reviewer_id, output_mode=output_mode, counts=counts,
                           findings=list(result.findings), language=lang)
 
-    # --- Repli : JSON inexploitable -> commentaire global ---
+    # --- Fallback: unusable JSON -> global comment ---
     if not result.parsed_ok:
-        logger.warning("PR #%s [%s] : sortie agent non-JSON, fallback commentaire global",
+        logger.warning("PR #%s [%s]: non-JSON agent output, global comment fallback",
                        pr_number, reviewer_id)
         counts["fallback"] = True
         prep.global_body = _guard(
@@ -263,7 +263,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             f"---\n{t('signature', lang)} · commit `{head_sha[:8]}`", logger, pr_number)
         return prep
 
-    # --- Validation contre le diff (anti-422) ---
+    # --- Validation against the diff (anti-422) ---
     inline: list = []
     out_of_diff: list = []
     for f in result.findings:
@@ -272,12 +272,12 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         if f.confidence < config.confidence_threshold:
             counts["dropped_low"] += 1
             f.fate = "dropped_low"
-            # Ancré quand même : le registre doit pouvoir dire si un humain a commenté la
-            # ligne que le seuil a fait taire — c'est le coût du seuil en rappel.
+            # Anchored anyway: the ledger must be able to tell whether a human commented on
+            # the line the threshold silenced — that is the threshold's cost in recall.
             if resolved is not None:
                 f.line, f.line_content = resolved
             continue
-        # Infirmé par la passe de vérification : au registre, jamais sur la PR.
+        # Refuted by the verification pass: to the ledger, never on the PR.
         if (f.verification or {}).get("status") in _VERIFY_DROP:
             counts["dropped_unverified"] += 1
             f.fate = "dropped_unverified"
@@ -290,14 +290,14 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             out_of_diff.append(f)
             counts["out_of_diff"] += 1
         else:
-            # re-ancrage sur la ligne réelle (corrige l'imprécision de numéro de ligne du LLM)
+            # re-anchoring on the actual line (fixes the LLM's line number imprecision)
             f.line, f.line_content = resolved
             f.valid = True
             inline.append(f)
 
-    # --- Routage (hors mode global) : seules les remarques graves et introduites par la PR
-    # partent en ligne. Le reste va dans le résumé, sans se perdre : une remarque mineure
-    # en ligne coûte l'attention du développeur autant qu'un vrai problème.
+    # --- Routing (outside global mode): only serious comments introduced by the PR go
+    # inline. The rest goes into the summary, without being lost: a minor inline comment
+    # costs the developer's attention as much as a real problem.
     minor: list = []
     preexisting: list = []
     if output_mode != "global":
@@ -307,11 +307,11 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             deja_en_ligne = (reviewer_id, fingerprint_hash(f.path, f.line_content)) \
                 in ctx.inline_by_marker
             if deja_en_ligne:
-                # Déjà commenté en ligne : reste sur son fil (dédup), pas en double au résumé.
+                # Already commented inline: stays on its thread (dedup), not duplicated in the summary.
                 kept.append(f)
                 continue
             if f.preexisting and f.severity != Severity.BLOCKER:
-                # Un BLOCKER reste en ligne même déplacé : on le dit, on ne le relègue pas.
+                # A BLOCKER stays inline even if moved: we say so, we do not relegate it.
                 preexisting.append(f)
             elif _SEV_RANK.get(f.severity, 2) > seuil:
                 minor.append(f)
@@ -322,8 +322,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         inline = kept
         counts["in_summary"] = len(minor) + len(preexisting)
 
-    # --- Conseils au relecteur humain : seulement s'ils portent sur des fichiers de la PR.
-    # Un conseil sans ancrage dans la PR est du générique (« bien tester ») : écarté.
+    # --- Advice for the human reviewer: only if it concerns files of the PR.
+    # Advice without an anchor in the PR is generic ("test well"): discarded.
     conseils = []
     if advice:
         for a in getattr(result, "advice", []) or []:
@@ -341,16 +341,16 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         advice=conseils, lang=lang),
         logger, pr_number)
 
-    # --- Mode `global` : un unique commentaire, mis à jour de commit en commit ---
+    # --- `global` mode: a single comment, updated from commit to commit ---
     if output_mode == "global":
         marker = summary_fingerprint(reviewer_id)
         existing = ctx.global_by_marker.get(marker_key(marker))
-        # « Silence is better than noise » : rien à dire et rien de posté jusqu'ici ->
-        # aucun commentaire. Un commentaire déjà posté est mis à jour, lui, pour ne pas
-        # laisser en place des remarques qui ne valent plus.
+        # "Silence is better than noise": nothing to say and nothing posted so far ->
+        # no comment. An already posted comment, however, is updated so as not to leave
+        # in place remarks that no longer hold.
         if silent_when_clean and not inline and not out_of_diff and not conseils \
                 and existing is None:
-            logger.info("PR #%s [%s] : rien à signaler, aucun commentaire (silent_when_clean)",
+            logger.info("PR #%s [%s]: nothing to report, no comment (silent_when_clean)",
                         pr_number, reviewer_id)
             return prep
         prep.global_body = f"{prep.summary}\n\n{marker}"
@@ -359,11 +359,11 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             f.fate, f.in_summary = "posted", True
         return prep
 
-    # --- Réconciliation inline ---
+    # --- Inline reconciliation ---
     for f in inline:
         marker = fingerprint(f.path, f.line_content, reviewer_id)
-        # La clé de dédup est le COUPLE (reviewer, hash) : deux reviewers peuvent commenter la
-        # même ligne sans s'annuler l'un l'autre (ADR v3 D3).
+        # The dedup key is the PAIR (reviewer, hash): two reviewers can comment on the
+        # same line without cancelling each other out (ADR v3 D3).
         existing = ctx.inline_by_marker.get((reviewer_id, fingerprint_hash(f.path, f.line_content)))
         if existing is None:
             f.fate = "posted"
@@ -374,30 +374,30 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
                 "_finding": f,
             })
             continue
-        # Déjà commenté : le finding est rattaché au commentaire existant.
+        # Already commented: the finding is attached to the existing comment.
         f.fate, f.comment_id = "deduped", existing.get("id")
         if existing.get("position") is None:
-            # finding toujours là mais commentaire devenu outdated -> répondre dans le thread
+            # finding still there but comment became outdated -> reply in the thread
             prep.replies.append((existing["id"],
                                  t("still_relevant", lang, sha=head_sha[:8],
                                    signature=t("signature", lang))))
         else:
             counts["deduped"] += 1
 
-    # --- Points corrigés : le commentaire existe encore, le finding a disparu ---
-    # Sans ça, une remarque traitée reste ouverte indéfiniment et personne ne sait qu'elle
-    # l'est. On ne le déduit QUE si la ligne commentée a réellement changé
-    # (`position is None` = le commentaire est devenu obsolète côté GitHub) : sinon, un
-    # modèle qui varie d'un run à l'autre suffirait à annoncer une correction imaginaire.
-    # « Reproduit » = le modèle a encore vu ce point, même si la vérification ou le seuil l'a
-    # écarté cette fois : ce n'est pas une correction, on n'annonce rien.
+    # --- Fixed points: the comment still exists, the finding has disappeared ---
+    # Without this, an addressed comment stays open indefinitely and nobody knows it has
+    # been addressed. We ONLY infer it if the commented line actually changed
+    # (`position is None` = the comment became outdated on GitHub's side): otherwise, a
+    # model that varies from one run to the next would be enough to announce an imaginary fix.
+    # "Reproduced" = the model still saw this point, even if verification or the threshold
+    # discarded it this time: it is not a fix, we announce nothing.
     reproduits = {fingerprint_hash(f.path, f.line_content) for f in result.findings
                   if f.line_content}
     for (rid, empreinte), commentaire in ctx.inline_by_marker.items():
         if rid != reviewer_id or empreinte in reproduits:
             continue
         if commentaire.get("position") is not None:
-            continue                       # la ligne n'a pas bougé : on ne conclut rien
+            continue                       # the line has not moved: we conclude nothing
         if commentaire.get("id") in prep.threads_resolus:
             continue
         prep.threads_resolus.add(commentaire["id"])
@@ -406,19 +406,19 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         counts["resolus"] = counts.get("resolus", 0) + 1
 
     if counts["dropped_low"]:
-        logger.info("PR #%s [%s] : %d finding(s) sous le seuil de confiance (%d) non postés",
+        logger.info("PR #%s [%s]: %d finding(s) below the confidence threshold (%d) not posted",
                     pr_number, reviewer_id, counts["dropped_low"], config.confidence_threshold)
     return prep
 
 
-# --------------------------------------------------------------------------- écriture
+# --------------------------------------------------------------------------- writing
 
 def _apply_cap(prepared: list[PreparedReview], cap: int, logger: logging.Logger,
                pr_number: int) -> list[dict]:
-    """Plafond de commentaires PAR PR, tous reviewers confondus (ADR v3 D6).
+    """Comment cap PER PR, all reviewers combined (ADR v3 D6).
 
-    Quatre reviewers zélés = 15+ commentaires = le dev décroche et désactive le bot. On
-    garde les plus graves, puis les plus sûrs ; le reste est journalisé, pas posté.
+    Four zealous reviewers = 15+ comments = the dev tunes out and disables the bot. We
+    keep the most serious, then the most confident; the rest is logged, not posted.
     """
     items = [c for p in prepared for c in p.batch]
     if cap <= 0 or len(items) <= cap:
@@ -431,7 +431,7 @@ def _apply_cap(prepared: list[PreparedReview], cap: int, logger: logging.Logger,
             c["_finding"].fate = "capped"
     for p in prepared:
         p.counts["capped"] = sum(1 for c in dropped if c["_reviewer"] == p.reviewer_id)
-    logger.info("PR #%s : plafond de %d commentaires atteint, %d finding(s) non postés : %s",
+    logger.info("PR #%s: cap of %d comments reached, %d finding(s) not posted: %s",
                 pr_number, cap, len(dropped),
                 ", ".join(f"{c['_reviewer']}:{c['path']}:{c['line']}" for c in dropped))
     return kept
@@ -439,12 +439,12 @@ def _apply_cap(prepared: list[PreparedReview], cap: int, logger: logging.Logger,
 
 def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: list[dict],
                         logger: logging.Logger) -> None:
-    """Rattache à chaque finding posté l'id de son commentaire (pour le registre).
+    """Attaches to each posted finding the id of its comment (for the ledger).
 
-    `create_review` ne renvoie que la review : on relit ses commentaires et on les apparie
-    par marqueur. Best-effort : un échec ne touche que le registre, jamais la PR.
+    `create_review` only returns the review: we re-read its comments and match them
+    by marker. Best-effort: a failure only affects the ledger, never the PR.
     """
-    # Clé (chemin, ligne, marqueur) : deux lignes au contenu identique partagent le marqueur.
+    # Key (path, line, marker): two lines with identical content share the marker.
     par_cle = {(c["path"], c["line"], marker_key(c["body"])): c["_finding"] for c in batch
                if c.get("_finding") is not None}
     if not par_cle or not (review or {}).get("id"):
@@ -452,7 +452,7 @@ def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: l
     try:
         commentaires = gh.list_review_comments_of_review(pr_number, review["id"])
     except Exception as e:
-        logger.info("PR #%s : ids des commentaires postés non relus (%s) — registre incomplet",
+        logger.info("PR #%s: ids of posted comments not re-read (%s) — incomplete ledger",
                     pr_number, type(e).__name__)
         return
     for c in commentaires:
@@ -464,11 +464,11 @@ def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: l
 
 def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[PreparedReview],
              logger: logging.Logger) -> dict:
-    """SEUL point d'écriture GitHub (ADR v3 D5). Applique le plafond D6 puis poste."""
+    """ONLY GitHub write point (ADR v3 D5). Applies the D6 cap then posts."""
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]
-    # `posted` reste le total (compatibilité), mais on distingue la nature : sans ça, un
-    # unique commentaire global se lisait « 1 inline » alors qu'aucun finding n'était passé.
+    # `posted` stays the total (compatibility), but we distinguish the kind: without this, a
+    # single global comment read as "1 inline" while no finding had gone through.
     totals = {"posted": 0, "posted_inline": 0, "posted_global": 0, "replied": 0,
               "deduped": 0, "out_of_diff": 0, "invalid": 0, "dropped_low": 0,
               "dropped_unverified": 0, "capped": 0, "resolus": 0, "fallback": False,
@@ -484,30 +484,30 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
     globals_ = [p for p in prepared if p.global_body]
     inline_summaries = [p.summary for p in prepared if p.output_mode != "global" and p.summary]
     summary_body = "\n\n---\n\n".join(inline_summaries) if inline_summaries else ""
-    # Remarques à délivrer par le seul résumé (hors-diff, mineures, préexistantes).
+    # Comments to deliver through the summary only (out-of-diff, minor, pre-existing).
     out_of_diff_only = any(p.counts.get("out_of_diff") or p.counts.get("in_summary")
                            or p.counts.get("advice") for p in prepared)
 
     if config.dry_run:
-        # En dry-run, AFFICHER ce qui serait posté : c'est tout l'intérêt du mode, sans quoi
-        # on ne peut ni juger la pertinence ni calibrer le seuil de confiance.
-        logger.info("PR #%s [DRY-RUN] : %d inline, %d global, %d réponses",
+        # In dry-run, SHOW what would be posted: that is the whole point of the mode,
+        # without which we can neither judge relevance nor calibrate the confidence threshold.
+        logger.info("PR #%s [DRY-RUN]: %d inline, %d global, %d replies",
                     pr_number, len(batch), len(globals_), len(replies))
         for c in batch:
             body = _MARKER_RE.sub("", c["body"]).replace("\n", " ").strip()
-            logger.info("  [%s] %s:%s (confiance %s) — %s",
+            logger.info("  [%s] %s:%s (confidence %s) — %s",
                         c["_reviewer"], c["path"], c["line"], c["_confidence"], body[:400])
         for p in prepared:
             if p.global_body:
                 extrait = _MARKER_RE.sub("", p.global_body).strip()
-                logger.info("  [%s] commentaire global :\n%s", p.reviewer_id, extrait[:1500])
+                logger.info("  [%s] global comment:\n%s", p.reviewer_id, extrait[:1500])
             elif p.summary and p.output_mode != "global":
-                logger.info("  [%s] résumé :\n%s", p.reviewer_id, p.summary[:1000])
+                logger.info("  [%s] summary:\n%s", p.reviewer_id, p.summary[:1000])
         totals["posted"] = totals["posted_inline"] = len(batch)
         totals["posted_global"] = len(globals_)
         return totals
 
-    # --- Post inline : UN seul write pour tous les reviewers (limite 80 créations/min) ---
+    # --- Inline post: ONE single write for all reviewers (limit 80 creations/min) ---
     if batch:
         api_batch = [_api_comment(c) for c in batch]
         try:
@@ -517,7 +517,7 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
             _attach_comment_ids(gh, pr_number, review, batch, logger)
         except GitHubApiError as e:
             if e.status_code == 422:
-                logger.warning("PR #%s : 422 sur le batch review, repli commentaire global", pr_number)
+                logger.warning("PR #%s: 422 on the review batch, global comment fallback", pr_number)
                 repli = gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch,
                                                                                prepared[0].language),
                                                                 logger, pr_number))
@@ -529,10 +529,10 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
             else:
                 raise
     elif summary_body and out_of_diff_only:
-        # Pas d'inline, mais des remarques à délivrer par le seul résumé (hors-diff,
-        # mineures, préexistantes). UN commentaire, mis à jour de commit en commit :
-        # en poster un à chaque push noierait la conversation.
-        # NB : une PR totalement propre ne reçoit PAS de commentaire.
+        # No inline, but comments to deliver through the summary only (out-of-diff,
+        # minor, pre-existing). ONE comment, updated from commit to commit:
+        # posting one on every push would drown the conversation.
+        # NB: a completely clean PR does NOT get a comment.
         marker = summary_fingerprint("resume")
         body = f"{summary_body}\n\n{marker}"
         existing = next((c for c in gh.list_issue_comments(pr_number)
@@ -542,7 +542,7 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
         else:
             gh.post_issue_comment(pr_number, body)
 
-    # --- Commentaires globaux (reviewers en mode `global`, fallbacks) ---
+    # --- Global comments (reviewers in `global` mode, fallbacks) ---
     for p in globals_:
         body = _guard(p.global_body, logger, pr_number)
         try:
@@ -556,18 +556,18 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
             totals["posted_global"] += 1
             totals["posted"] += 1
         except GitHubApiError:
-            logger.warning("PR #%s [%s] : échec du commentaire global", pr_number, p.reviewer_id)
+            logger.warning("PR #%s [%s]: global comment failed", pr_number, p.reviewer_id)
 
-    # --- Réponses dans les threads (ré-ancrage / dialogue) ---
+    # --- Replies in threads (re-anchoring / dialogue) ---
     for cid, msg in replies:
         try:
             gh.reply_to_comment(pr_number, cid, msg)
             totals["replied"] += 1
         except GitHubApiError:
-            logger.warning("PR #%s : échec réponse thread %s", pr_number, cid)
+            logger.warning("PR #%s: thread reply failed %s", pr_number, cid)
 
-    logger.info("PR #%s : %d inline, %d global, %d réponses, %d dédup, %d hors-diff, "
-                "%d sous-seuil, %d non vérifiés, %d plafonnés, %d résolus",
+    logger.info("PR #%s: %d inline, %d global, %d replies, %d dedup, %d out-of-diff, "
+                "%d below threshold, %d unverified, %d capped, %d resolved",
                 pr_number, totals["posted_inline"], totals["posted_global"], totals["replied"],
                 totals["deduped"], totals["out_of_diff"], totals["dropped_low"],
                 totals["dropped_unverified"], totals["capped"], totals["resolus"])
@@ -576,7 +576,7 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
 
 def reconcile(pr: dict, config: Config, gh: GitHubClient, result: ReviewResult,
               logger: logging.Logger, reviewer_id: str | None = None) -> dict:
-    """Façade mono-reviewer : prépare puis poste en une passe."""
+    """Single-reviewer facade: prepares then posts in one pass."""
     reviewer_id = reviewer_id or getattr(config, "reviewer_id", None) or LEGACY_REVIEWER_ID
     ctx = load_pr_context(gh, pr["number"])
     prep = prepare(pr, config, ctx, result, logger, reviewer_id)

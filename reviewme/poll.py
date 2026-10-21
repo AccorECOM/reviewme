@@ -1,8 +1,8 @@
-"""Entrée boucle (mode VPS) : poll GitHub puis `run_review` par PR.
+"""Loop entry point (VPS mode): poll GitHub then `run_review` per PR.
 
-Chaque PR passe par la MÊME fonction one-shot que le CLI et le webhook. Le mode d'entrée
-est un simple wrapper autour d'elle. Sur un VPS, un cron/systemd-timer appelant le CLI
-one-shot est préférable à cette boucle résidente ; elle reste utile en dev.
+Each PR goes through the SAME one-shot function as the CLI and the webhook. The entry
+mode is just a wrapper around it. On a VPS, a cron/systemd timer calling the one-shot
+CLI is preferable to this resident loop; it remains useful in dev.
 """
 from __future__ import annotations
 
@@ -28,24 +28,24 @@ def _handle_signal(sig: int, frame) -> None:
 
 
 def poll_once(gh: GitHubClient, config, logger: logging.Logger) -> int:
-    mode = "toute PR ouverte" if config.review_all_prs else f"label '{config.review_label}'"
+    mode = "any open PR" if config.review_all_prs else f"label '{config.review_label}'"
     logger.info("Poll (%s)...", mode)
     try:
         prs = gh.list_open_prs() if config.review_all_prs else gh.list_labeled_prs()
     except Exception as e:
-        logger.error("Échec récupération des PR : %s", e)
+        logger.error("Failed to fetch PRs: %s", e)
         return 0
 
-    # On saute les PR déjà reviewées ET celles dont CE commit a échoué (pas de retry infini
-    # payant sur un commit qui échoue en permanence ; un nouveau commit sera bien retenté).
+    # Skip PRs already reviewed AND those whose CURRENT commit failed (no infinite paid
+    # retry on a commit that fails permanently; a new commit will be retried).
     to_review = [pr for pr in prs
                  if not is_reviewed(pr["number"], pr["head"]["sha"])
                  and not failed_at(pr["number"], pr["head"]["sha"])]
     if not to_review:
-        logger.info("%d PR trouvée(s), rien de nouveau à reviewer", len(prs))
+        logger.info("%d PR(s) found, nothing new to review", len(prs))
         return 0
 
-    logger.info("%d PR à reviewer (parallèle)", len(to_review))
+    logger.info("%d PR(s) to review (parallel)", len(to_review))
     with ThreadPoolExecutor(max_workers=min(len(to_review), 4)) as pool:
         futures = {pool.submit(run_review, pr, config, gh, logger): pr["number"] for pr in to_review}
         processed = 0
@@ -64,18 +64,18 @@ def _start_dashboard(logger: logging.Logger) -> None:
     try:
         server = HTTPServer(("127.0.0.1", 8420), DashboardHandler)
         server.daemon_threads = True
-        logger.info("  Dashboard : http://127.0.0.1:8420")
+        logger.info("  Dashboard: http://127.0.0.1:8420")
         server.serve_forever()
     except OSError:
-        logger.warning("  Port dashboard 8420 déjà utilisé, ignoré")
+        logger.warning("  Dashboard port 8420 already in use, skipped")
 
 
 def main() -> None:
-    # `--help` ne doit jamais démarrer la boucle : sans ça, une frappe d'exploration
-    # lance un daemon qui consomme du budget.
+    # `--help` must never start the loop: otherwise an exploratory keystroke launches a
+    # daemon that burns budget.
     if any(a in ("-h", "--help") for a in sys.argv[1:]):
         print(__doc__.strip())
-        print("\nUsage : reviewme-poll   (réglages par .env : GITHUB_REPO, POLL_INTERVAL, "
+        print("\nUsage: reviewme-poll   (settings via .env: GITHUB_REPO, POLL_INTERVAL, "
               "REVIEW_LABEL, MAX_BUDGET_USD)")
         return
 
@@ -84,14 +84,14 @@ def main() -> None:
 
     config = load_config()
     logger = setup_logging()
-    logger.info("ReviewMe (poll) démarre — repo=%s intervalle=%ss budget=$%s",
+    logger.info("ReviewMe (poll) starting — repo=%s interval=%ss budget=$%s",
                 config.github_repo, config.poll_interval, config.max_budget_usd)
 
     threading.Thread(target=_start_dashboard, args=(logger,), daemon=True).start()
     gh = GitHubClient(config)
     try:
         core = gh.check_rate_limit()["core"]
-        logger.info("  Rate limit API : %s/%s", core["remaining"], core["limit"])
+        logger.info("  API rate limit: %s/%s", core["remaining"], core["limit"])
         while not _shutdown:
             poll_once(gh, config, logger)
             if _shutdown:
@@ -102,7 +102,7 @@ def main() -> None:
                 time.sleep(1)
     finally:
         gh.close()
-        logger.info("ReviewMe (poll) arrêté")
+        logger.info("ReviewMe (poll) stopped")
 
 
 if __name__ == "__main__":

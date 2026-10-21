@@ -1,25 +1,23 @@
-"""Registre des findings et des runs : de quoi JUGER le bot, pas seulement le compter.
+"""Ledger of findings and runs: what it takes to JUDGE the bot, not just count it.
 
-`stats.json` dit combien de remarques ont été postées et ce qu'elles ont coûté. Il ne dit
-pas lesquelles étaient justes, ni ce que le seuil de confiance a fait taire. Pour répondre
-à « nos réglages sont-ils bons et utiles ? », il faut garder la trace de CHAQUE finding,
-posté ou non, avec son sort :
+`stats.json` says how many findings were posted and what they cost. It does not say which
+ones were right, nor what the confidence threshold silenced. To answer "are our settings
+good and useful?", we must keep track of EVERY finding, posted or not, with its fate:
 
-- `findings.jsonl` : une ligne par finding et par run. Sans le texte du message par défaut
-  (`ledger.include_text`), donc transportable par un cache de CI comme `stats.json` ;
-- `runs.jsonl` : une ligne par reviewer et par run (modèle réel, tours, coût, cache,
-  contexte réellement injecté) ;
-- `config-snapshot/<hash>/` : l'état des réglages au moment du run, pour attribuer un
-  changement de comportement à un changement de configuration.
+- `findings.jsonl`: one line per finding and per run. Without the message text by default
+  (`ledger.include_text`), so portable via a CI cache like `stats.json`;
+- `runs.jsonl`: one line per reviewer and per run (actual model, turns, cost, cache,
+  context actually injected);
+- `config-snapshot/<hash>/`: the state of the settings at run time, to attribute a change
+  in behavior to a configuration change.
 
-Append-only, et UN FICHIER PAR RUN (`findings/<horodatage>-<run_id>.jsonl`, écrit d'un
-bloc puis renommé) : deux runs concurrents ne peuvent pas entrelacer leurs lignes, et un
-cache de CI qui fusionne des dossiers ne perd que des fichiers entiers, jamais une ligne
-coupée. Les lecteurs (`read_all`) fusionnent les parts. Rejouer un build ajoute un run, il
-n'écrase rien : l'analyse dédoublonne par (`pr`, `head_sha`, `variant`) si besoin.
+Append-only, and ONE FILE PER RUN (`findings/<timestamp>-<run_id>.jsonl`, written in one
+block then renamed): two concurrent runs cannot interleave their lines, and a CI cache
+that merges folders only loses whole files, never a truncated line. Readers (`read_all`)
+merge the parts. Replaying a build adds a run, it overwrites nothing: analysis dedups by
+(`pr`, `head_sha`, `variant`) if needed.
 
-Le registre n'influence JAMAIS la review : toute erreur d'écriture est journalisée puis
-ignorée.
+The ledger NEVER influences the review: any write error is logged then ignored.
 """
 from __future__ import annotations
 
@@ -37,7 +35,7 @@ from .reconciler import fingerprint_hash
 
 SCHEMA_VERSION = 1
 
-#: Sorts possibles d'un finding. `dropped_unverified` est réservé à la passe de vérification.
+#: Possible fates of a finding. `dropped_unverified` is reserved for the verification pass.
 FATES = ("posted", "dropped_low", "dropped_unverified", "out_of_diff", "capped", "deduped",
          "invalid")
 
@@ -47,21 +45,21 @@ SNAPSHOT_DIR = "config-snapshot"
 
 
 def ledger_dir(config: Config | None = None) -> Path:
-    """Dossier du registre.
+    """Ledger folder.
 
-    Un run SIMULÉ (`REVIEWME_FAKE`) écrit à part, même quand `REVIEWME_LEDGER_DIR` est
-    posé : ses findings sont fabriqués, les mêler aux vrais fausserait toutes les mesures —
-    mais on veut pouvoir vérifier la tuyauterie.
+    A SIMULATED run (`REVIEWME_FAKE`) writes separately, even when `REVIEWME_LEDGER_DIR` is
+    set: its findings are made up, mixing them with real ones would skew every measure —
+    but we still want to be able to check the plumbing.
     """
     explicit = os.environ.get("REVIEWME_LEDGER_DIR", "").strip()
     base = Path(explicit).expanduser() if explicit else DATA_DIR / "ledger"
     if config is not None and config.fake:
-        return base.with_name(base.name + "-simule")
+        return base.with_name(base.name + "-fake")
     return base
 
 
 def variant() -> str:
-    """`live` (la chaîne évaluée) ou `baseline` (le témoin qui tourne sur les mêmes PR)."""
+    """`live` (the pipeline under evaluation) or `baseline` (the control running on the same PRs)."""
     explicit = os.environ.get("REVIEWME_LEDGER_VARIANT", "").strip()
     if explicit:
         return explicit
@@ -70,7 +68,7 @@ def variant() -> str:
 
 
 def engine_commit() -> str:
-    """Commit du moteur qui a produit le run. `REVIEWME_ENGINE_COMMIT` prime (CI sans .git)."""
+    """Commit of the engine that produced the run. `REVIEWME_ENGINE_COMMIT` wins (CI without .git)."""
     explicit = os.environ.get("REVIEWME_ENGINE_COMMIT", "").strip()
     if explicit:
         return explicit
@@ -86,9 +84,9 @@ def engine_commit() -> str:
 
 
 def include_text(project) -> bool:
-    """Écrire `message` et `suggestion` ? Défaut non : le registre reste sans contenu de PR.
+    """Write `message` and `suggestion`? Default no: the ledger stays free of PR content.
 
-    `REVIEWME_LEDGER_INCLUDE_TEXT` prime sur `[ledger] include_text` du `project.toml`.
+    `REVIEWME_LEDGER_INCLUDE_TEXT` takes precedence over `[ledger] include_text` in `project.toml`.
     """
     env = os.environ.get("REVIEWME_LEDGER_INCLUDE_TEXT")
     if env is not None:
@@ -100,10 +98,10 @@ def new_run_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-# --------------------------------------------------------------------------- réglages
+# --------------------------------------------------------------------------- settings
 
 def _config_files(project) -> list[tuple[str, Path]]:
-    """(chemin relatif, fichier) des réglages qui pilotent le comportement des reviewers."""
+    """(relative path, file) of the settings that drive the reviewers' behavior."""
     from .projects import TEMPLATES_DIR
     base = project.directory if project.directory is not None else TEMPLATES_DIR
     if base is None or not Path(base).is_dir():
@@ -116,7 +114,7 @@ def _config_files(project) -> list[tuple[str, Path]]:
 
 
 def config_hash(project) -> str:
-    """Empreinte des réglages du projet (personas, consignes, reviewer.toml)."""
+    """Fingerprint of the project's settings (personas, guidelines, reviewer.toml)."""
     h = hashlib.sha256()
     for rel, path in _config_files(project):
         h.update(rel.encode())
@@ -125,10 +123,10 @@ def config_hash(project) -> str:
 
 
 def snapshot_config(project, root: Path, chash: str) -> None:
-    """Garde une copie des `*.toml` et l'empreinte des `*.md` — une fois par état de config.
+    """Keep a copy of the `*.toml` files and the fingerprint of the `*.md` — once per config state.
 
-    Les prompts ne sont pas recopiés : leur hash suffit à dire QU'ils ont changé, et le
-    dépôt de config dit COMMENT.
+    Prompts are not copied: their hash is enough to say THAT they changed, and the config
+    repo says HOW.
     """
     cible = root / SNAPSHOT_DIR / chash
     if (cible / "manifest.json").exists():
@@ -147,10 +145,10 @@ def snapshot_config(project, root: Path, chash: str) -> None:
                                          encoding="utf-8")
 
 
-# --------------------------------------------------------------------------- lignes
+# --------------------------------------------------------------------------- rows
 
 def diff_size(diff: str) -> tuple[int, int]:
-    """(fichiers, lignes modifiées) d'un diff unifié."""
+    """(files, changed lines) of a unified diff."""
     fichiers = lignes = 0
     for brute in diff.splitlines():
         if brute.startswith("+++ "):
@@ -161,20 +159,20 @@ def diff_size(diff: str) -> tuple[int, int]:
 
 
 def _verification(v: dict | None, with_text: bool) -> dict:
-    """Verdict du vérificateur. Sa justification (`reason`) est du texte sur la PR."""
+    """The verifier's verdict. Its justification (`reason`) is text about the PR."""
     if not v:
         return {"status": "skipped", "confidence": None}
     return {k: val for k, val in v.items() if with_text or k != "reason"}
 
 
 def diff_paths(diff: str) -> set[str]:
-    """Chemins (côté nouveau fichier) touchés par un diff unifié."""
+    """Paths (new-file side) touched by a unified diff."""
     return {brute[6:].strip() for brute in diff.splitlines() if brute.startswith("+++ b/")}
 
 
 def finding_rows(base: dict, reviewer: str, result, findings: list, *,
                  with_text: bool) -> list[dict]:
-    """Lignes de `findings.jsonl` pour UN reviewer : chaque finding, plus les invalides."""
+    """`findings.jsonl` rows for ONE reviewer: each finding, plus the invalid ones."""
     rows = []
     for f in findings:
         row = {
@@ -233,15 +231,15 @@ def run_row(base: dict, reviewer: str, result, *, threshold: int, diff_files: in
         "threshold": threshold,
         "findings": len(result.findings) + (getattr(result, "invalid", 0) or 0),
         "fates": fates,
-        # Conseils au relecteur humain réellement affichés (ancrés dans la PR).
+        # Advice for the human reviewer actually displayed (anchored in the PR).
         "advice": advice_count,
     }
 
 
 def write_part(root: Path, name: str, rows: list[dict], part_id: str = "") -> Path | None:
-    """Écrit `rows` dans une part de `name` (`findings.jsonl` -> `findings/<id>.jsonl`).
+    """Write `rows` into a part of `name` (`findings.jsonl` -> `findings/<id>.jsonl`).
 
-    Écriture dans un fichier temporaire puis renommage : une part est complète ou absente.
+    Written to a temporary file then renamed: a part is either complete or absent.
     """
     if not rows:
         return None
@@ -257,7 +255,7 @@ def write_part(root: Path, name: str, rows: list[dict], part_id: str = "") -> Pa
 
 
 def read_all(root: Path, name: str) -> list[dict]:
-    """Toutes les lignes de `name` : fichier unique historique, puis parts dans l'ordre."""
+    """All rows of `name`: the legacy single file, then the parts in order."""
     rows = read_jsonl(root / name)
     folder = root / Path(name).stem
     if folder.is_dir():
@@ -269,10 +267,10 @@ def read_all(root: Path, name: str) -> list[dict]:
 def record(pr: dict, config: Config, project, prepared: list, outcomes: list, diff: str,
            logger: logging.Logger, *, root: Path | None = None,
            status: str = "ok") -> str | None:
-    """Écrit le run dans le registre. Renvoie le `run_id`, ou None si rien n'a été écrit.
+    """Write the run to the ledger. Returns the `run_id`, or None if nothing was written.
 
-    `prepared` et `outcomes` sont alignés (un `PreparedReview` par reviewer exécuté).
-    `status` = `post_failed` quand l'écriture GitHub a échoué : le run reste mesurable.
+    `prepared` and `outcomes` are aligned (one `PreparedReview` per executed reviewer).
+    `status` = `post_failed` when the GitHub write failed: the run remains measurable.
     """
     try:
         root = root or ledger_dir(config)
@@ -311,17 +309,17 @@ def record(pr: dict, config: Config, project, prepared: list, outcomes: list, di
             r_rows.append(r_row)
         write_part(root, FINDINGS_FILE, f_rows, run_id)
         write_part(root, RUNS_FILE, r_rows, run_id)
-        logger.info("PR #%s : registre %s — %d finding(s), %d run(s) reviewer (%s)",
+        logger.info("PR #%s: ledger %s — %d finding(s), %d reviewer run(s) (%s)",
                     pr["number"], run_id, len(f_rows), len(r_rows), root)
         return run_id
     except Exception as e:
-        logger.warning("PR #%s : registre non écrit (%s: %s) — sans effet sur la review",
+        logger.warning("PR #%s: ledger not written (%s: %s) — no effect on the review",
                        pr.get("number"), type(e).__name__, e)
         return None
 
 
 def read_jsonl(path: Path) -> list[dict]:
-    """Lit un JSONL en ignorant les lignes corrompues (écriture interrompue en CI)."""
+    """Read a JSONL, ignoring corrupted lines (write interrupted in CI)."""
     if not path.is_file():
         return []
     rows, rejected = [], 0
@@ -334,6 +332,6 @@ def read_jsonl(path: Path) -> list[dict]:
         except ValueError:
             rejected += 1
     if rejected:
-        logging.getLogger("reviewme").warning("registre : %d ligne(s) illisible(s) ignorée(s) "
-                                              "dans %s", rejected, path)
+        logging.getLogger("reviewme").warning("ledger: %d unreadable line(s) ignored "
+                                              "in %s", rejected, path)
     return rows

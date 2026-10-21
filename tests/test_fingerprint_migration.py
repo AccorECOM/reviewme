@@ -1,13 +1,13 @@
-"""Garde-fou de la migration v0.2 -> v3 du fingerprint (ADR v3 D3).
+"""Safeguard for the v0.2 -> v3 fingerprint migration (ADR v3 D3).
 
-Le risque couvert : la première review v3 sur une PR déjà commentée par la v0.2 reposte
-TOUT en double parce que les anciens marqueurs (sans identifiant de reviewer) ne sont plus
-reconnus. Ces tests figent les deux invariants qui l'empêchent :
+The risk covered: the first v3 review on a PR already commented by v0.2 reposts
+EVERYTHING as duplicates because the old markers (without a reviewer id) are no longer
+recognized. These tests pin the two invariants that prevent it:
 
-  1. le HASH est inchangé (le reviewer_id est un préfixe, il n'entre pas dans le sha1) ;
-  2. un marqueur sans reviewer est attribué à `tech`.
+  1. the HASH is unchanged (reviewer_id is a prefix, it is not part of the sha1);
+  2. a marker without a reviewer is attributed to `tech`.
 
-Exécution : `pytest tests/` ou `python tests/test_fingerprint_migration.py`.
+Run: `pytest tests/` or `python tests/test_fingerprint_migration.py`.
 """
 import hashlib
 import os
@@ -29,57 +29,57 @@ LINE = '        let authToken = "sk-live-XXXX"'
 
 
 def _legacy_hash(path: str, line_content: str) -> str:
-    """Formule d'origine, recopiée à l'identique. Ne pas la « moderniser » : c'est elle
-    qui sert de témoin — si `fingerprint_hash` s'en écarte, tous les commentaires déjà
-    postés deviennent orphelins."""
+    """Original formula, copied verbatim. Do not "modernize" it: it is the control —
+    if `fingerprint_hash` drifts from it, every comment already posted becomes
+    orphaned."""
     return hashlib.sha1(f"{path}\n{normalize_line(line_content)}".encode()).hexdigest()[:10]
 
 
-def test_hash_inchange_depuis_v02():
-    # Si ce test casse, TOUS les commentaires déjà postés deviennent orphelins -> doublons.
+def test_hash_unchanged_since_v02():
+    # If this test breaks, ALL comments already posted become orphaned -> duplicates.
     assert fingerprint_hash(PATH, LINE) == _legacy_hash(PATH, LINE)
 
 
-def test_reviewer_id_absent_du_hash():
+def test_reviewer_id_not_in_hash():
     assert fingerprint_hash(PATH, LINE) == fingerprint_hash(PATH, LINE)
     assert "tech" not in fingerprint_hash(PATH, LINE)
-    # deux reviewers -> même hash, marqueurs distincts
+    # two reviewers -> same hash, distinct markers
     assert fingerprint(PATH, LINE, "tech") != fingerprint(PATH, LINE, "us")
 
 
-def test_marqueur_legacy_attribue_a_tech():
+def test_legacy_marker_attributed_to_tech():
     legacy = f"<!-- reviewme:{_legacy_hash(PATH, LINE)} -->"
     assert marker_key(legacy) == (LEGACY_REVIEWER_ID, _legacy_hash(PATH, LINE))
 
 
-def test_migration_zero_doublon():
-    """LE test de migration : un commentaire v0.2 et un finding v3 du reviewer `tech`
-    produisent la MÊME clé de dédup -> le finding est dédupliqué, pas reposté."""
-    ancien = f"<!-- reviewme:{_legacy_hash(PATH, LINE)} -->"          # posté par la v0.2
-    nouveau = fingerprint(PATH, LINE, "tech")                          # calculé par la v3
-    assert marker_key(ancien) == marker_key(nouveau)
+def test_migration_zero_duplicates():
+    """THE migration test: a v0.2 comment and a v3 finding from the `tech` reviewer
+    produce the SAME dedup key -> the finding is deduplicated, not reposted."""
+    old = f"<!-- reviewme:{_legacy_hash(PATH, LINE)} -->"          # posted by v0.2
+    new = fingerprint(PATH, LINE, "tech")                          # computed by v3
+    assert marker_key(old) == marker_key(new)
 
 
-def test_reviewers_ne_se_dedupent_pas_entre_eux():
-    """Deux reviewers sur la MÊME ligne doivent coexister (sinon le second est avalé)."""
+def test_reviewers_do_not_dedupe_each_other():
+    """Two reviewers on the SAME line must coexist (otherwise the second is swallowed)."""
     assert marker_key(fingerprint(PATH, LINE, "tech")) != marker_key(fingerprint(PATH, LINE, "us"))
     assert marker_key(fingerprint(PATH, LINE, "us")) == ("us", fingerprint_hash(PATH, LINE))
 
 
-def test_commentaire_humain_non_reconnu():
-    assert marker_key("Bonne remarque, je corrige.") is None
+def test_human_comment_not_recognized():
+    assert marker_key("Good point, fixing it.") is None
     assert marker_key("") is None
     assert marker_key(None) is None
 
 
-def test_les_deux_formes_sont_nettoyees_du_corps():
-    """`_degraded_body` retire le marqueur avant l'affichage : les 2 formes doivent partir."""
-    for body in (f"texte <!-- reviewme:{_legacy_hash(PATH, LINE)} -->",
-                 f"texte {fingerprint(PATH, LINE, 'i18n')}"):
+def test_both_forms_stripped_from_body():
+    """`_degraded_body` strips the marker before display: both forms must go."""
+    for body in (f"text <!-- reviewme:{_legacy_hash(PATH, LINE)} -->",
+                 f"text {fingerprint(PATH, LINE, 'i18n')}"):
         assert "reviewme:" not in _MARKER_RE.sub("", body)
 
 
-def test_id_avec_tiret_et_underscore():
+def test_id_with_dash_and_underscore():
     for rid in ("i18n", "us", "tech-ios", "sec_audit"):
         assert marker_key(fingerprint(PATH, LINE, rid)) == (rid, fingerprint_hash(PATH, LINE))
 
@@ -94,5 +94,5 @@ if __name__ == "__main__":
             except AssertionError as e:
                 fails += 1
                 print(f"  FAIL {name}: {e}")
-    print("\n" + ("TOUS LES TESTS PASSENT" if not fails else f"{fails} ÉCHEC(S)"))
+    print("\n" + ("ALL TESTS PASS" if not fails else f"{fails} FAILURE(S)"))
     sys.exit(1 if fails else 0)

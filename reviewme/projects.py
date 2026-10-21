@@ -1,25 +1,25 @@
-"""Configuration par PROJET et specs de reviewers (ADR v3, D1/D2/D4).
+"""PER-PROJECT configuration and reviewer specs (ADR v3, D1/D2/D4).
 
-L'unité de configuration est le **projet**, pas le reviewer : un dossier
-`config/projects/<repo>/` porte ses guidelines ET ses reviewers complets (persona incluse).
-Deux teams sur deux produits écrivent des personas réellement différentes — il n'y a donc
-volontairement AUCUN héritage entre projets (cf. ADR v3 D1). Seul le contrat de sortie
-reste au core (`config/output-contract.md`, D1bis) : c'est une interface avec le parseur,
-pas du contenu éditorial.
+The unit of configuration is the **project**, not the reviewer: a
+`config/projects/<repo>/` folder carries its guidelines AND its complete reviewers
+(persona included). Two teams on two products write genuinely different personas — so
+there is deliberately NO inheritance between projects (see ADR v3 D1). Only the output
+contract stays in the core (`config/output-contract.md`, D1bis): it is an interface with
+the parser, not editorial content.
 
-Arborescence attendue :
+Expected layout:
 
     config/
-      output-contract.md                 <- core, non surchargeable
+      output-contract.md                 <- core, not overridable
       projects/
         <repo>/
-          common/*.md                    <- consignes communes aux reviewers du projet
-          reviewers/                     <- LA source de vérité : un dossier = un reviewer
+          common/*.md                    <- guidelines shared by the project's reviewers
+          reviewers/                     <- THE source of truth: one folder = one reviewer
             tech/{reviewer.toml, system.md}
             us/{reviewer.toml, system.md}
 
-Mode simple : sans `PROJECT`, on fabrique un projet virtuel à un seul reviewer, qui
-réutilise le squelette de `config/templates/`. Aucune instance à créer pour démarrer.
+Simple mode: without `PROJECT`, a virtual project with a single reviewer is built, which
+reuses the skeleton from `config/templates/`. No instance to create to get started.
 """
 from __future__ import annotations
 
@@ -31,28 +31,28 @@ from pathlib import Path, PurePosixPath
 from .config import CONFIG_DIR, Config
 from .strings import normalize as normalize_language
 
-#: Emplacement par défaut des projets (dans le repo du core).
+#: Default location of projects (in the core repo).
 PROJECTS_DIR = CONFIG_DIR / "projects"
 TEMPLATES_DIR = CONFIG_DIR / "templates"
 
 
 def projects_dir(config=None) -> Path:
-    """Où vivent les projets (ADR v3 D12).
+    """Where projects live (ADR v3 D12).
 
-    `REVIEWME_CONFIG_HOME` pointe un dépôt de configuration EXTERNE (un dépôt par organisation) :
-    le core reste alors intact et `git pull`-able, la config de projets vit dans son propre
-    dépôt versionné à part. Sans cette variable, on retombe sur `config/projects/` du repo.
-    C'est délibérément un chemin, pas un submodule : un submodule ramène exactement les
-    frictions d'un fork (init, update, HEAD détachée) qu'on cherche à éviter.
+    `REVIEWME_CONFIG_HOME` points to an EXTERNAL configuration repo (one repo per organisation):
+    the core then stays untouched and `git pull`-able, the project config lives in its own
+    separately versioned repo. Without this variable, we fall back to the repo's `config/projects/`.
+    It is deliberately a path, not a submodule: a submodule brings back exactly the
+    friction of a fork (init, update, detached HEAD) we are trying to avoid.
     """
     home = (getattr(config, "config_home", "") or os.environ.get("REVIEWME_CONFIG_HOME", "")).strip()
     if home:
         return Path(home).expanduser() / "projects"
     return PROJECTS_DIR
-#: Contrat de sortie du core. Cherché à la racine de `config/`, puis à l'ancien emplacement.
+#: Core output contract. Looked up at the root of `config/`, then at the old location.
 _CONTRACT_FILE = CONFIG_DIR / "output-contract.md"
-#: Méthode de review et de vérification : core, injectées à tous les reviewers (non
-#: surchargeables, comme le contrat).
+#: Review and verification method: core, injected into every reviewer (not
+#: overridable, like the contract).
 _METHOD_FILE = CONFIG_DIR / "review-method.md"
 _VERIFY_FILE = CONFIG_DIR / "verify-method.md"
 DEFAULT_MAX_TURNS = 30
@@ -60,52 +60,52 @@ DEFAULT_VERIFY_MAX_TURNS = 15
 
 OUTPUT_MODES = ("inline", "global", "mixed")
 
-#: Contextes qu'un reviewer peut exiger via `requires`. Chacun correspond à un fournisseur
-#: dans `reviewme/context/`. Une valeur inconnue est REFUSÉE au chargement : sans ce
-#: contrôle, une faute de frappe (`requires = ["jira"]`) rendrait le reviewer inerte pour
-#: toujours, sans le moindre message.
+#: Contexts a reviewer can require via `requires`. Each one maps to a provider in
+#: `reviewme/context/`. An unknown value is REJECTED at load time: without this check,
+#: a typo (`requires = ["jira"]`) would make the reviewer inert forever, without any
+#: message.
 KNOWN_CONTEXTS = {
-    "jira_ticket": "Ticket + critères d'acceptation, via l'API Jira (context/jira.py)",
+    "jira_ticket": "Ticket + acceptance criteria, via the Jira API (context/jira.py)",
 }
 
 
 class ProjectConfigError(RuntimeError):
-    """Config de projet absente ou invalide — on préfère échouer tôt et clairement."""
+    """Missing or invalid project config — we prefer to fail early and clearly."""
 
 
 @dataclass(frozen=True)
 class ReviewerSpec:
-    """Un reviewer tel que déclaré par un projet."""
+    """A reviewer as declared by a project."""
     id: str
     project: str
-    system_prompt: str                     # contenu de system.md (la persona, propre au projet)
+    system_prompt: str                     # content of system.md (the persona, project-specific)
     output_mode: str = "inline"            # inline | global | mixed  (ADR v3 D2)
-    when_paths: tuple[str, ...] = ()       # globs ; vide = se déclenche toujours (D4 niveau 2)
-    requires: tuple[str, ...] = ()         # contextes obligatoires, ex. ("jira_ticket",)
-    priority: int = 100                    # ordre d'exécution : petit = prioritaire (D8)
-    max_budget_usd: float | None = None    # None = budget global de la Config
-    model: str = ""                        # modèle LLM de CE reviewer. Vide = CLAUDE_MODEL,
-                                           # sinon le défaut de la CLI.
-    mcp_config: str = ""                   # fichier de config MCP, confiné au dossier du
-                                           # reviewer (doc de bibliothèques, outillage…)
-    precheck: str = ""                     # script déterministe optionnel (D7)
-    common: str = ""                       # consignes communes du projet (langue, ton, format)
-    directory: Path | None = None          # dossier du reviewer (résolution du precheck)
-    enabled: bool = True                   # False = présent mais mis en sommeil
-    context_read: tuple[str, ...] = ()     # fichiers/dossiers de conventions à lire DANS le
-                                           # dépôt reviewé (D13) — jamais recopiés ici
-    plugins_marketplaces: tuple[str, ...] = ()   # marketplaces Claude Code à déclarer
-    plugins_install: tuple[str, ...] = ()        # plugins à installer avant la review
-    max_turns: int = DEFAULT_MAX_TURNS     # tours de la review ; 30 coupe un gros diff
-    verify: bool = True                    # passe de vérification des findings
-    verify_model: str = ""                 # modèle du vérificateur. Vide = celui du reviewer
+    when_paths: tuple[str, ...] = ()       # globs; empty = always triggers (D4 level 2)
+    requires: tuple[str, ...] = ()         # required contexts, e.g. ("jira_ticket",)
+    priority: int = 100                    # execution order: lower = higher priority (D8)
+    max_budget_usd: float | None = None    # None = global budget from the Config
+    model: str = ""                        # LLM model of THIS reviewer. Empty = CLAUDE_MODEL,
+                                           # otherwise the CLI default.
+    mcp_config: str = ""                   # MCP config file, confined to the reviewer's
+                                           # folder (library docs, tooling…)
+    precheck: str = ""                     # optional deterministic script (D7)
+    common: str = ""                       # project's shared guidelines (language, tone, format)
+    directory: Path | None = None          # reviewer folder (precheck resolution)
+    enabled: bool = True                   # False = present but disabled
+    context_read: tuple[str, ...] = ()     # convention files/folders to read IN the
+                                           # reviewed repo (D13) — never copied here
+    plugins_marketplaces: tuple[str, ...] = ()   # Claude Code marketplaces to declare
+    plugins_install: tuple[str, ...] = ()        # plugins to install before the review
+    max_turns: int = DEFAULT_MAX_TURNS     # review turns; 30 cuts off a large diff
+    verify: bool = True                    # findings verification pass
+    verify_model: str = ""                 # verifier model. Empty = the reviewer's
     verify_max_turns: int = DEFAULT_VERIFY_MAX_TURNS
-    silent_when_clean: bool = False        # mode `global` : ne rien poster quand rien à dire
-    context_auto: bool = True              # lire CLAUDE.md / AGENTS.md / .claude/rules seul
-    language: str = "en"                   # langue des remarques (`[review] language`)
-    findings: bool = True                  # False = relecteur de CONSEILS (ex. `advisor`) :
-                                           # ne poste jamais de remarque, seulement ses
-                                           # « Conseil pour la relecture » (`advice`)
+    silent_when_clean: bool = False        # `global` mode: post nothing when there is nothing to say
+    context_auto: bool = True              # read CLAUDE.md / AGENTS.md / .claude/rules automatically
+    language: str = "en"                   # language of the comments (`[review] language`)
+    findings: bool = True                  # False = ADVICE reviewer (e.g. `advisor`):
+                                           # never posts a comment, only its
+                                           # "Conseil pour la relecture" (`advice`)
 
     def budget(self, config: Config) -> float:
         return self.max_budget_usd if self.max_budget_usd is not None else config.max_budget_usd
@@ -116,29 +116,29 @@ class ProjectConfig:
     name: str
     directory: Path | None
     reviewers: tuple[ReviewerSpec, ...] = field(default_factory=tuple)
-    simple: bool = False                   # True = projet virtuel du mode simple
-    language: str = "en"                   # langue des remarques et des textes postés
-    ledger_include_text: bool = False      # `[ledger] include_text` du project.toml : le
-                                           # registre garde-t-il le texte des remarques ?
+    simple: bool = False                   # True = simple mode's virtual project
+    language: str = "en"                   # language of comments and posted texts
+    ledger_include_text: bool = False      # `[ledger] include_text` from project.toml: does
+                                           # the ledger keep the text of the comments?
 
     def reviewer(self, reviewer_id: str) -> ReviewerSpec | None:
         return next((r for r in self.reviewers if r.id == reviewer_id), None)
 
 
-# --------------------------------------------------------------------------- chargement
+# --------------------------------------------------------------------------- loading
 
 def load_output_contract() -> str:
-    """Le contrat JSON du core (D1bis). Non surchargeable par un projet."""
+    """The core JSON contract (D1bis). Not overridable by a project."""
     return _CONTRACT_FILE.read_text(encoding="utf-8") if _CONTRACT_FILE.exists() else ""
 
 
 def load_review_method() -> str:
-    """La méthode en deux phases du core. Non surchargeable par un projet."""
+    """The core two-phase method. Not overridable by a project."""
     return _METHOD_FILE.read_text(encoding="utf-8") if _METHOD_FILE.exists() else ""
 
 
 def load_verify_method() -> str:
-    """Les consignes de la passe de vérification (core)."""
+    """The verification pass guidelines (core)."""
     return _VERIFY_FILE.read_text(encoding="utf-8") if _VERIFY_FILE.exists() else ""
 
 
@@ -159,14 +159,14 @@ def _concat_markdown(directory: Path) -> str:
 
 
 def _load_common(project_dir: Path) -> str:
-    """Consignes COMMUNES aux reviewers d'un projet (langue, ton, format des remarques).
+    """Guidelines SHARED by a project's reviewers (language, tone, comment format).
 
-    Ce n'est PAS l'endroit où recopier les conventions de code du projet : celles-ci vivent
-    déjà dans le dépôt à reviewer (`AGENTS.md`, `CONTRIBUTING.md`, docs internes) et l'agent
-    les lit à la source avec Read/Grep — une copie ici divergerait silencieusement du repo
-    dès la première évolution. On ne met ici que ce qui n'existe nulle part dans le repo.
+    This is NOT the place to copy the project's code conventions: they already live in
+    the repo under review (`AGENTS.md`, `CONTRIBUTING.md`, internal docs) and the agent
+    reads them at the source with Read/Grep — a copy here would silently diverge from the
+    repo at the first change. Only put here what exists nowhere in the repo.
     """
-    for folder in ("common", "guidelines"):        # `guidelines/` : ancien nom, encore accepté
+    for folder in ("common", "guidelines"):        # `guidelines/`: old name, still accepted
         content = _concat_markdown(project_dir / folder)
         if content:
             return content
@@ -244,18 +244,18 @@ def _positive_int(value, key: str, reviewer_id: str) -> int:
     return n
 
 
-#: Ce qu'un projet peut ajuster sur un reviewer du core, sans le copier.
+#: What a project can adjust on a core reviewer, without copying it.
 CORE_OVERRIDES = ("read", "paths", "instructions", "model", "max_turns", "priority", "enabled")
 
 
 def _adapt_core(spec: ReviewerSpec, overrides: dict, project_name: str) -> ReviewerSpec:
-    """Applique `[reviewers.<id>]` du project.toml à un reviewer du core.
+    """Applies `[reviewers.<id>]` from project.toml to a core reviewer.
 
-    - `read` : AJOUTÉ à son `context.read` (la doc du projet, là où elle est rangée) ;
-    - `paths` : remplace son `when.paths` ;
-    - `instructions` : texte ajouté à la fin de sa persona (connaissance du projet) ;
-    - `model`, `max_turns`, `priority`, `enabled` : remplacent les valeurs du core.
-    Le reste du reviewer (méthode, sortie, vérification) reste celui du core.
+    - `read`: ADDED to its `context.read` (the project's docs, wherever they are stored);
+    - `paths`: replaces its `when.paths`;
+    - `instructions`: text appended to the end of its persona (project knowledge);
+    - `model`, `max_turns`, `priority`, `enabled`: replace the core values.
+    The rest of the reviewer (method, output, verification) stays the core's.
     """
     import dataclasses
     if not isinstance(overrides, dict):
@@ -286,7 +286,7 @@ def _adapt_core(spec: ReviewerSpec, overrides: dict, project_name: str) -> Revie
 
 
 def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
-    """Charge `<projets>/<name>/`. Lève ProjectConfigError si la config est invalide."""
+    """Loads `<projects>/<name>/`. Raises ProjectConfigError if the config is invalid."""
     root = base_dir or projects_dir()
     pdir = root / name
     if not pdir.is_dir():
@@ -296,18 +296,18 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
             f"project '{name}' not found in {root}"
             + (f" (available: {', '.join(available)})" if available else ""))
 
-    # Réglages du PROJET (et non d'un reviewer), optionnels.
+    # PROJECT settings (not a reviewer's), optional.
     settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
     ledger = settings.get("ledger", {}) or {}
 
-    # Deux sources de reviewers :
-    # - les DOSSIERS de `reviewers/` : les reviewers propres au projet. Pas de liste à tenir
-    #   à jour ailleurs : y oublier un dossier le rendrait silencieusement inactif ;
-    # - `[reviewers] core = [...]` du project.toml : des reviewers du CORE, utilisés tels
-    #   quels depuis `config/templates/reviewers/`, sans copie. Ils suivent les évolutions du
-    #   moteur. Un dossier local du même nom prime (le projet a voulu sa propre version).
-    # Mettre en sommeil : `enabled = false` dans le reviewer.toml local, ou retirer l'id de
-    # la liste `core`.
+    # Two sources of reviewers:
+    # - the FOLDERS of `reviewers/`: the project's own reviewers. No list to keep up to date
+    #   elsewhere: forgetting a folder there would make it silently inactive;
+    # - `[reviewers] core = [...]` from project.toml: CORE reviewers, used as is from
+    #   `config/templates/reviewers/`, without copying. They follow the engine's changes.
+    #   A local folder with the same name takes precedence (the project wanted its own version).
+    # To disable: `enabled = false` in the local reviewer.toml, or remove the id from the
+    # `core` list.
     core_ids = (settings.get("reviewers", {}) or {}).get("core", []) or []
     if not isinstance(core_ids, list):
         raise ProjectConfigError(f"project '{name}': `[reviewers] core` must be a list")
@@ -323,8 +323,8 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
     local_ids = sorted(d.name for d in rroot.iterdir()
                        if d.is_dir() and not d.name.startswith(".")) if rroot.is_dir() else []
     if not local_ids and not core_ids:
-        # Un dossier de projet totalement vide = submodule git non initialisé neuf fois sur
-        # dix. Le dire, sinon le message envoie chercher au mauvais endroit.
+        # A completely empty project folder = an uninitialised git submodule nine times out
+        # of ten. Say so, otherwise the message sends people looking in the wrong place.
         if not any(pdir.iterdir()):
             raise ProjectConfigError(
                 f"project '{name}': empty folder ({pdir}). If it is a git submodule, "
@@ -359,32 +359,32 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
 
 
 def _simple_project(config: Config) -> ProjectConfig:
-    """Projet virtuel du **mode simple** : un seul reviewer, aucune instance à créer.
+    """Virtual project of the **simple mode**: a single reviewer, no instance to create.
 
-    Il réutilise le squelette de `config/templates/` — la même persona que celle qu'on
-    obtiendrait avec `init-project`. Pas de jeu de prompts séparé à maintenir en double.
+    It reuses the skeleton from `config/templates/` — the same persona one would get
+    with `init-project`. No separate prompt set to maintain in duplicate.
     """
     tech = TEMPLATES_DIR / "reviewers" / "tech"
     system = tech / "system.md"
     spec = ReviewerSpec(
         id=config.reviewer_id or "tech",
-        project="(mode simple)",
+        project="(simple mode)",
         system_prompt=system.read_text(encoding="utf-8") if system.exists() else "",
         output_mode="inline",
         common=_concat_markdown(TEMPLATES_DIR / "common"),
         directory=tech,
         language=normalize_language(os.environ.get("REVIEWME_LANGUAGE")),
     )
-    return ProjectConfig(name="(mode simple)", directory=None, reviewers=(spec,), simple=True,
+    return ProjectConfig(name="(simple mode)", directory=None, reviewers=(spec,), simple=True,
                          language=spec.language)
 
 
 def resolve_project(config: Config) -> ProjectConfig:
-    """Le projet actif : `config.project` s'il est défini, sinon celui du mode simple."""
+    """The active project: `config.project` if set, otherwise the simple mode one."""
     return load_project(config.project, projects_dir(config)) if config.project else _simple_project(config)
 
 
-# --------------------------------------------------------------------------- sélection
+# --------------------------------------------------------------------------- selection
 
 def _matches(path: str, patterns: tuple[str, ...]) -> bool:
     p = PurePosixPath(path)
@@ -393,10 +393,10 @@ def _matches(path: str, patterns: tuple[str, ...]) -> bool:
 
 def select_reviewers(project: ProjectConfig, changed_paths: list[str],
                      available_context: set[str] | None = None) -> tuple[list[ReviewerSpec], list[tuple[ReviewerSpec, str]]]:
-    """Applique le déclenchement par PR (ADR v3 D4, niveau 2).
+    """Applies per-PR triggering (ADR v3 D4, level 2).
 
-    Renvoie (retenus, [(écarté, raison)]). Sans ce filtre, CHAQUE PR paierait tous les
-    reviewers du projet — c'est le principal levier de coût du fan-out.
+    Returns (kept, [(skipped, reason)]). Without this filter, EVERY PR would pay for all
+    the project's reviewers — it is the main cost lever of the fan-out.
     """
     available = available_context or set()
     kept: list[ReviewerSpec] = []

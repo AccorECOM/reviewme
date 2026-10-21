@@ -1,19 +1,19 @@
-"""Mode simulé : parcourir toute la chaîne SANS appeler le LLM.
+"""Simulated mode: run the whole pipeline WITHOUT calling the LLM.
 
-Une review coûte quelques dollars et deux minutes. Quand on met au point la CI, la
-sélection des reviewers, les prechecks ou le posting, on relance des dizaines de fois
-et on repaie à chaque essai un modèle dont on n'utilise pas la réponse.
+A review costs a few dollars and two minutes. When tuning the CI, reviewer selection,
+prechecks or posting, you rerun dozens of times and pay again on each attempt for a
+model whose answer you do not use.
 
-`REVIEWME_FAKE=1` remplace le seul appel au modèle. TOUT le reste tourne pour de vrai :
-sélection, prechecks, lecture des conventions, validation contre le diff, empreintes,
-dédup, seuil de confiance, plafond, écriture GitHub. C'est donc un test de la
-tuyauterie, pas une simulation de bout en bout.
+`REVIEWME_FAKE=1` replaces only the model call. EVERYTHING else runs for real:
+selection, prechecks, reading conventions, validation against the diff, fingerprints,
+dedup, confidence threshold, cap, GitHub writes. So it is a test of the plumbing, not
+an end-to-end simulation.
 
-Les findings sont ancrés sur de VRAIES lignes ajoutées du diff : sans ça, ils seraient
-tous rejetés par la validation anti-422 et on ne testerait rien.
+Findings are anchored on REAL added lines of the diff: otherwise they would all be
+rejected by the anti-422 validation and nothing would be tested.
 
-À combiner avec `DRY_RUN=1` en général — sinon des remarques marquées [SIMULATED]
-atterrissent sur une vraie PR.
+Usually combine with `DRY_RUN=1` — otherwise findings tagged [SIMULATED] land on a
+real PR.
 """
 from __future__ import annotations
 
@@ -25,12 +25,12 @@ from .models import Advice, Finding, ReviewResult, Severity
 _ENTETE_FICHIER = re.compile(r"^\+\+\+ b/(.+)$")
 _ENTETE_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
-# Trois niveaux qui encadrent le seuil par défaut (70) : on veut voir le filtrage
-# à l'œuvre, pas seulement le chemin nominal.
+# Three levels around the default threshold (70): we want to see filtering at work,
+# not just the nominal path.
 #
-# La sévérité est l'ENUM, pas une chaîne libre : `_SEV_LABEL` et `_SEV_RANK` sont indexés
-# par les membres de Severity. Une chaîne brute retomberait silencieusement sur [MINOR]
-# pour les trois, et le tri par sévérité — qui pilote le plafonnement — ne testerait rien.
+# Severity is the ENUM, not a free string: `_SEV_LABEL` and `_SEV_RANK` are keyed by
+# Severity members. A raw string would silently fall back to [MINOR] for all three, and
+# the severity sort — which drives capping — would test nothing.
 _GABARITS = (
     (95, Severity.BLOCKER, "Simulated finding, high confidence: must be posted."),
     (75, Severity.IMPORTANT, "Simulated finding just above the threshold: must be posted."),
@@ -39,7 +39,7 @@ _GABARITS = (
 
 
 def _lignes_ajoutees(diff: str) -> Iterator[tuple[str, int, str]]:
-    """(chemin, numéro de ligne côté RIGHT, contenu) pour chaque ligne ajoutée du diff."""
+    """(path, RIGHT-side line number, content) for each added line of the diff."""
     chemin, ligne = "", 0
     for brute in diff.splitlines():
         entete = _ENTETE_FICHIER.match(brute)
@@ -56,17 +56,17 @@ def _lignes_ajoutees(diff: str) -> Iterator[tuple[str, int, str]]:
             yield chemin, ligne, brute[1:]
             ligne += 1
         elif brute.startswith("-"):
-            continue          # côté LEFT : ne consomme pas de numéro côté RIGHT
+            continue          # LEFT side: does not consume a RIGHT-side line number
         else:
             ligne += 1
 
 
 def review_simulee(reviewer_id: str, diff: str) -> ReviewResult:
-    """ReviewResult déterministe, sans aucun appel au modèle."""
+    """Deterministic ReviewResult, without any model call."""
     candidates = [c for c in _lignes_ajoutees(diff) if c[2].strip()]
 
-    # Un point d'ancrage différent par reviewer : sinon les quatre produisent le même
-    # fingerprint et le dédup masque le fan-out qu'on cherche justement à observer.
+    # A different anchor per reviewer: otherwise all four produce the same fingerprint and
+    # dedup hides the fan-out we are precisely trying to observe.
     decalage = sum(ord(c) for c in reviewer_id) % max(len(candidates), 1)
 
     findings = []
@@ -87,13 +87,13 @@ def review_simulee(reviewer_id: str, diff: str) -> ReviewResult:
                  f"(`REVIEWME_FAKE`). {len(findings)} finding(s) made up from "
                  f"{len(candidates)} added line(s) of the diff."),
         findings=findings,
-        # Un conseil ancré sur un vrai fichier du diff : la section « Conseil pour la
-        # relecture » doit apparaître dans le résumé simulé.
+        # Advice anchored on a real file of the diff: the "review advice" section must
+        # appear in the simulated summary.
         advice=[Advice(topic=f"[SIMULATED · {reviewer_id}] Point for a human to check",
                        why="Made-up advice to test the display.",
                        paths=[candidates[0][0]])] if candidates else [],
         raw="",
-        metadata={"model": "simulé", "cost_usd": 0.0, "duration_ms": 0,
+        metadata={"model": "simulated", "cost_usd": 0.0, "duration_ms": 0,
                   "input_tokens": 0, "output_tokens": 0, "fake": True},
         parsed_ok=True,
     )

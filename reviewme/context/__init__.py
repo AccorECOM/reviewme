@@ -1,7 +1,7 @@
-"""Fournisseurs de contexte externe (ADR v3 D9).
+"""External context providers (ADR v3 D9).
 
-Un fournisseur enrichit le prompt d'un reviewer avec des données que le diff ne contient
-pas (ticket, spec, incident...). Règle non négociable : c'est TOUJOURS optionnel. Source
-indisponible -> le reviewer qui l'exige est skippé, jamais une erreur, et la review
-technique passe quand même. Le core ne dépend d'aucun service externe.
+A provider enriches a reviewer's prompt with data the diff does not contain (ticket,
+spec, incident...). Non-negotiable rule: it is ALWAYS optional. Source unavailable ->
+the reviewer that requires it is skipped, never an error, and the technical review
+still goes through. The core depends on no external service.
 """

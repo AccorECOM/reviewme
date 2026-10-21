@@ -1,14 +1,14 @@
-"""Moteur de review : invoque `claude -p` et récupère des findings STRUCTURÉS.
+"""Review engine: invokes `claude -p` and retrieves STRUCTURED findings.
 
-Invariants de sécurité :
-- PLUS de `Write` dans l'allowlist. L'agent ne produit AUCUN fichier ; sa réponse finale
-  (JSON) est lue dans le champ `result` de `--output-format json`. Cela supprime à la
-  fois le vecteur d'écriture arbitraire ET le round-trip par fichier de sortie.
-- Le diff est présenté comme DONNÉE NON FIABLE (jamais des instructions).
-- Allowlist verrouillée ici, non surchargeable par la config.
+Security invariants:
+- NO MORE `Write` in the allowlist. The agent produces NO file; its final answer
+  (JSON) is read from the `result` field of `--output-format json`. This removes both
+  the arbitrary-write vector AND the round-trip through an output file.
+- The diff is presented as UNTRUSTED DATA (never instructions).
+- Allowlist locked here, cannot be overridden by the config.
 
-Si la sortie n'est pas un JSON exploitable, on renvoie parsed_ok=False : l'appelant
-retombe sur un unique commentaire global, sans jamais crasher.
+If the output is not usable JSON, we return parsed_ok=False: the caller falls back
+to a single global comment, without ever crashing.
 """
 from __future__ import annotations
 
@@ -27,59 +27,59 @@ from .scrub import scrub_text
 
 _log = logging.getLogger("reviewme.reviewer")
 
-# Allowlist VERROUILLÉE (invariant sécurité — jamais de Write, jamais --dangerously-skip-permissions).
-# ⚠️ Risque résiduel connu : git log/show/diff acceptent --output=FICHIER (écriture) et
-# `git show <sha>:<path>` (lecture arbitraire du repo). La mitigation REQUISE est le sandbox de
-# déploiement (pas de réseau sortant + FS confiné au clone cible), cf. doc §Sécurité.
+# LOCKED allowlist (security invariant — never Write, never --dangerously-skip-permissions).
+# ⚠️ Known residual risk: git log/show/diff accept --output=FILE (write) and
+# `git show <sha>:<path>` (arbitrary repo read). The REQUIRED mitigation is the deployment
+# sandbox (no outbound network + FS confined to the target clone), see doc §Security.
 _ALLOWED_TOOLS = "Read,Glob,Grep,Bash(git log:*),Bash(git show:*),Bash(git diff:*)"
-# ⚠️ NE PAS y ajouter `Task`, et ne pas passer `--agents` à la CLI. Vérifié : un sous-agent
-# n'hérite PAS de cette allowlist — il utilise les outils déclarés dans sa propre
-# définition. Un parent restreint à `Read,Glob,Grep` a pu exécuter `whoami` via un
-# sous-agent déclarant `tools: ["Bash"]`. Comme la configuration d'un reviewer peut venir
-# du dépôt reviewé (donc d'une Pull Request), ce serait rouvrir l'exécution de code
-# arbitraire que `_load_instance_env` et le confinement du precheck ont fermée.
-# Pour faire varier le modèle selon la tâche : créer un reviewer de plus avec son `model`.
+# ⚠️ DO NOT add `Task` here, and do not pass `--agents` to the CLI. Verified: a sub-agent
+# does NOT inherit this allowlist — it uses the tools declared in its own definition.
+# A parent restricted to `Read,Glob,Grep` was able to run `whoami` through a sub-agent
+# declaring `tools: ["Bash"]`. Since a reviewer's configuration can come from the
+# reviewed repo (hence from a Pull Request), this would reopen the arbitrary code
+# execution that `_load_instance_env` and the precheck confinement closed.
+# To vary the model by task: create one more reviewer with its own `model`.
 _TIMEOUT_S = 900
 
 
 def _find_claude(config: Config | None = None) -> str:
-    """Binaire de la CLI de review.
+    """Review CLI binary.
 
-    `CLAUDE_BIN` permet de pointer un wrapper maison — passerelle d'entreprise, quotas,
-    journalisation — sans toucher au code. Le wrapper doit accepter les mêmes arguments que
-    `claude` et produire la même enveloppe `--output-format json`.
+    `CLAUDE_BIN` allows pointing to an in-house wrapper — corporate gateway, quotas,
+    logging — without touching the code. The wrapper must accept the same arguments as
+    `claude` and produce the same `--output-format json` envelope.
 
-    Pour un simple changement d'endpoint (passerelle compatible Anthropic), il n'y a rien à
-    faire ici : `ANTHROPIC_BASE_URL` et `ANTHROPIC_AUTH_TOKEN` sont hérités par le
-    sous-processus depuis l'environnement (donc depuis le `.env` de l'instance).
+    For a simple endpoint change (Anthropic-compatible gateway), there is nothing to do
+    here: `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` are inherited by the
+    subprocess from the environment (hence from the instance's `.env`).
     """
     explicit = (getattr(config, "claude_bin", "") or "").strip()
     if explicit:
         path = shutil.which(explicit) or (explicit if Path(explicit).is_file() else None)
         if not path:
-            raise RuntimeError(f"CLAUDE_BIN pointe un exécutable introuvable : {explicit}")
+            raise RuntimeError(f"CLAUDE_BIN points to an executable that cannot be found: {explicit}")
         return path
 
     path = shutil.which("claude")
     if not path:
         raise RuntimeError(
-            "CLI `claude` introuvable dans le PATH. Installe-la : npm install -g @anthropic-ai/claude-code "
-            "(ou pointe un wrapper compatible avec CLAUDE_BIN)."
+            "`claude` CLI not found in PATH. Install it: npm install -g @anthropic-ai/claude-code "
+            "(or point to a compatible wrapper with CLAUDE_BIN)."
         )
     return path
 
 
 def _build_prompt(pr_number: int, pr_title: str, diff_path: str, config: Config,
                   spec: ReviewerSpec, extra_context: str = "") -> str:
-    """Assemble le prompt d'UN reviewer.
+    """Assembles the prompt of ONE reviewer.
 
-    Répartition ADR v3 : la persona et les consignes communes viennent du PROJET (via `spec`),
-    le contrat de sortie vient du CORE (D1bis — c'est l'interface du parseur, un projet ne peut
-    pas la redéfinir sans casser le parsing silencieusement). La MÉTHODE (chasse puis
-    vérification, preuve par remarque) vient aussi du core, pour la même raison : c'est
-    l'interface du moteur, pas de l'éditorial, et chaque projet en profite sans la recopier
-    dans son `system.md`. Les conventions de code, elles,
-    ne sont PAS injectées : l'agent les lit dans le dépôt à reviewer (D13).
+    ADR v3 split: the persona and shared guidelines come from the PROJECT (via `spec`),
+    the output contract comes from the CORE (D1bis — it is the parser's interface, a project
+    cannot redefine it without silently breaking parsing). The METHOD (hunt then
+    verification, evidence per comment) also comes from the core, for the same reason: it
+    is the engine's interface, not editorial content, and every project benefits from it
+    without copying it into its `system.md`. Code conventions, however,
+    are NOT injected: the agent reads them in the repo under review (D13).
     """
     system = spec.system_prompt
     method = "" if config.baseline else load_review_method()
@@ -111,8 +111,8 @@ def _build_prompt(pr_number: int, pr_title: str, diff_path: str, config: Config,
 
 
 def _language_block(spec: ReviewerSpec) -> str:
-    """Langue des textes produits : les prompts sont en anglais, les remarques suivent le
-    projet (`[review] language`)."""
+    """Language of the produced texts: prompts are in English, comments follow the
+    project (`[review] language`)."""
     from .strings import LANGUAGES
     name = LANGUAGES.get(getattr(spec, "language", "en"), "English")
     return (f"# Output language\nWrite every human-readable field (`summary`, `message`, "
@@ -121,7 +121,7 @@ def _language_block(spec: ReviewerSpec) -> str:
 
 
 def _mcp_config_path(spec: ReviewerSpec) -> Path | None:
-    """Fichier de config MCP du reviewer, ou None. Refuse toute échappée du dossier."""
+    """The reviewer's MCP config file, or None. Refuses any escape from the folder."""
     if not spec.mcp_config or spec.directory is None:
         return None
     base = spec.directory.resolve()
@@ -134,10 +134,10 @@ def _mcp_config_path(spec: ReviewerSpec) -> Path | None:
 
 
 def pick_model(spec: ReviewerSpec) -> str:
-    """Modèle à utiliser pour ce reviewer, ou "" pour laisser la CLI décider.
+    """Model to use for this reviewer, or "" to let the CLI decide.
 
-    Priorité : le reviewer d'abord — un relecteur factuel n'a pas besoin du même modèle
-    qu'une analyse d'architecture — puis `CLAUDE_MODEL`, puis le défaut de la CLI.
+    Priority: the reviewer first — a factual reviewer does not need the same model as
+    an architecture analysis — then `CLAUDE_MODEL`, then the CLI default.
     """
     return spec.model or os.environ.get("CLAUDE_MODEL", "")
 
@@ -145,12 +145,12 @@ def pick_model(spec: ReviewerSpec) -> str:
 def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: int,
                model: str = "", budget: float = 0.0, label: str = "",
                timeout: int = _TIMEOUT_S, reviewer_tools: bool = True) -> tuple[str, dict]:
-    """Un appel `claude -p` en lecture seule. Renvoie (texte de l'agent, métadonnées).
+    """A read-only `claude -p` call. Returns (agent text, metadata).
 
-    Partagé par la review et la passe de vérification : même allowlist, même diagnostic.
-    `reviewer_tools=False` (vérification) : ni l'agent `--agent` ni les serveurs MCP du
-    reviewer — le vérificateur a son propre rôle, pas la persona « trouve des problèmes ».
-    Lève RuntimeError si la CLI ne rend rien d'exploitable.
+    Shared by the review and the verification pass: same allowlist, same diagnostics.
+    `reviewer_tools=False` (verification): neither the `--agent` agent nor the reviewer's
+    MCP servers — the verifier has its own role, not the "find problems" persona.
+    Raises RuntimeError if the CLI returns nothing usable.
     """
     label = label or spec.id
     cmd = [
@@ -159,43 +159,43 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
         "--output-format", "json",
         "--max-turns", str(max_turns),
         "--allowedTools", _ALLOWED_TOOLS,
-        # Le dépôt relu est celui de la PR : ses `.claude/settings.json` (hooks = code
-        # exécuté avec les secrets de la CI) et `.mcp.json` ne doivent pas être chargés.
-        # Seuls les réglages utilisateur du runner, et les MCP passés par `--mcp-config`.
-        # Limite connue : la CLI charge quand même le `CLAUDE.md` du répertoire courant
-        # (seul `--bare` l'évite, au prix de l'auth par jeton d'une passerelle).
+        # The reviewed repo is the PR's: its `.claude/settings.json` (hooks = code run
+        # with the CI secrets) and `.mcp.json` must not be loaded. Only the runner's
+        # user settings, and the MCPs passed through `--mcp-config`.
+        # Known limitation: the CLI still loads the current directory's `CLAUDE.md`
+        # (only `--bare` avoids it, at the cost of a gateway's token auth).
         "--setting-sources", "user",
         "--strict-mcp-config",
     ]
-    # Persona : auto-suffisant via system.md par défaut ; --agent seulement si configuré
+    # Persona: self-sufficient via system.md by default; --agent only if configured
     if config.claude_agent and reviewer_tools:
         cmd.extend(["--agent", config.claude_agent])
     if model:
         cmd.extend(["--model", model])
-    # Serveurs MCP déclarés par le reviewer (documentation de bibliothèques, outillage
-    # interne). Chemin CONFINÉ à son dossier : une config peut venir d'un dépôt tiers.
+    # MCP servers declared by the reviewer (library documentation, internal tooling).
+    # Path CONFINED to its folder: a config can come from a third-party repo.
     mcp = _mcp_config_path(spec) if reviewer_tools else None
     if mcp:
         cmd.extend(["--mcp-config", str(mcp)])
     if budget > 0:
         cmd.extend(["--max-budget-usd", str(budget)])
 
-    # Diagnostic d'invocation. Le prompt n'est PAS journalisé (des dizaines de Ko,
-    # et il contient le diff) : seule sa taille l'est. Le reste des arguments dit ce
-    # qu'on a vraiment demandé à la CLI — binaire résolu, modèle, MCP, allowlist.
+    # Invocation diagnostics. The prompt is NOT logged (tens of KB, and it contains
+    # the diff): only its size is. The rest of the arguments shows what was actually
+    # asked of the CLI — resolved binary, model, MCP, allowlist.
     if config.debug:
-        argv = [f"<prompt {len(prompt)} octets>" if a is prompt else a for a in cmd]
-        _log.info("[%s] invocation : %s", label, " ".join(argv))
+        argv = [f"<prompt {len(prompt)} bytes>" if a is prompt else a for a in cmd]
+        _log.info("[%s] invocation: %s", label, " ".join(argv))
         _log.info("[%s] cwd=%s", label, config.repo_path)
 
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout, cwd=config.repo_path,
     )
 
-    # claude peut sortir en code != 0 tout en ayant DÉJÀ émis une enveloppe JSON exploitable
-    # (ex. plafond --max-budget-usd / --max-turns atteint en fin de review). On parse donc
-    # stdout AVANT de traiter le code retour comme un échec, pour ne pas jeter — et re-facturer
-    # au run suivant — une review déjà terminée.
+    # claude can exit with code != 0 while having ALREADY emitted a usable JSON envelope
+    # (e.g. --max-budget-usd / --max-turns cap reached at the end of the review). So we parse
+    # stdout BEFORE treating the return code as a failure, so as not to throw away — and
+    # bill again on the next run — an already finished review.
     agent_text = ""
     metadata: dict = {}
     stdout = result.stdout.strip()
@@ -207,9 +207,9 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
             cache_read = usage.get("cache_read_input_tokens", 0)
             cache_create = usage.get("cache_creation_input_tokens", 0)
             raw_input = usage.get("input_tokens", 0)
-            # `modelUsage` est indexé par nom de modèle : c'est la seule source fiable
-            # de ce qui a RÉELLEMENT répondu (une passerelle d'entreprise peut router
-            # vers autre chose que ce qui a été demandé).
+            # `modelUsage` is keyed by model name: it is the only reliable source of
+            # what ACTUALLY answered (a corporate gateway may route to something other
+            # than what was requested).
             metadata = {
                 "model": ", ".join((data.get("modelUsage") or {}).keys()) or "?",
                 "cost_usd": data.get("total_cost_usd", 0),
@@ -221,51 +221,51 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
                 "cache_read_tokens": cache_read,
                 "cache_create_tokens": cache_create,
                 "max_turns": max_turns,
-                # `success`, `error_max_turns`, `error_during_execution`… : dit si la
-                # review est allée au bout, ce qu'aucun compteur ne montre sinon.
+                # `success`, `error_max_turns`, `error_during_execution`…: tells whether
+                # the review went all the way, which no counter shows otherwise.
                 "subtype": data.get("subtype") or "",
                 "is_error": bool(data.get("is_error")),
             }
-            # Champs de l'enveloppe qu'on ne gardait pas et qui disent si le run
-            # s'est REELLEMENT bien passé. `subtype` distingue un succès d'un arrêt
-            # au plafond de tours ; `permission_denials` liste les outils que l'agent
-            # a tenté d'utiliser sans y avoir droit — le symptôme d'une allowlist
-            # trop étroite, invisible autrement.
+            # Envelope fields we did not keep and that tell whether the run REALLY
+            # went well. `subtype` distinguishes a success from a stop at the turn
+            # cap; `permission_denials` lists the tools the agent tried to use
+            # without being allowed — the symptom of a too narrow allowlist,
+            # invisible otherwise.
             refus = data.get("permission_denials") or []
             if data.get("is_error") or data.get("subtype") not in (None, "success"):
-                _log.warning("[%s] la CLI signale un problème : is_error=%s subtype=%s "
-                             "tours=%s", label, data.get("is_error"),
+                _log.warning("[%s] the CLI reports a problem: is_error=%s subtype=%s "
+                             "turns=%s", label, data.get("is_error"),
                              data.get("subtype"), data.get("num_turns"))
             if refus:
                 outils = sorted({str(d.get("tool_name", d)) for d in refus}) \
                     if isinstance(refus, list) else [str(refus)]
-                _log.warning("[%s] %d refus d'outil (allowlist) : %s",
+                _log.warning("[%s] %d tool denial(s) (allowlist): %s",
                              label, len(refus), ", ".join(outils)[:200])
             if config.debug:
-                _log.info("[%s] enveloppe : %s", label,
+                _log.info("[%s] envelope: %s", label,
                           {k: v for k, v in data.items()
                            if k not in ("result", "usage", "modelUsage")})
         except json.JSONDecodeError:
-            # pas d'enveloppe JSON : on n'exploite la sortie brute que si le run a réussi
-            _log.warning("[%s] sortie non-JSON de la CLI (returncode=%s) : %s",
+            # no JSON envelope: the raw output is only used if the run succeeded
+            _log.warning("[%s] non-JSON CLI output (returncode=%s): %s",
                          label, result.returncode, scrub_text(stdout[:300]))
             agent_text = stdout if result.returncode == 0 else ""
 
     stderr = scrub_text(result.stderr.strip())
     if stderr and (config.debug or result.returncode != 0):
-        _log.warning("[%s] stderr (returncode=%s) : %s", label, result.returncode,
+        _log.warning("[%s] stderr (returncode=%s): %s", label, result.returncode,
                      stderr[:1000])
 
     if not agent_text:
         raise RuntimeError(
-            f"claude returncode={result.returncode}, aucune sortie exploitable : "
+            f"claude returncode={result.returncode}, no usable output: "
             f"{stderr[:500]}"
         )
     return agent_text, metadata
 
 
 def write_diff(pr_diff: str) -> str:
-    """Écrit le diff dans un fichier temporaire. C'est NOTRE code qui écrit, pas l'agent."""
+    """Writes the diff to a temporary file. It is OUR code that writes, not the agent."""
     diff_file = tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False,
                                             encoding="utf-8")
     diff_file.write(pr_diff)
@@ -275,17 +275,17 @@ def write_diff(pr_diff: str) -> str:
 
 def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
                spec: ReviewerSpec | None = None, extra_context: str = "") -> ReviewResult:
-    """Lance la review d'UN reviewer et renvoie un ReviewResult (findings + metadata).
+    """Runs the review of ONE reviewer and returns a ReviewResult (findings + metadata).
 
-    `spec` absent -> reviewer du projet actif, ou du projet virtuel du mode simple.
-    `extra_context` porte les données injectées par le core (ticket Jira, sortie d'un
-    precheck déterministe) — jamais des instructions de l'agent lui-même.
+    `spec` missing -> reviewer of the active project, or of the simple mode's virtual project.
+    `extra_context` carries the data injected by the core (Jira ticket, output of a
+    deterministic precheck) — never instructions from the agent itself.
     """
     if spec is None:
         spec = resolve_project(config).reviewers[0]
 
-    # Mode simulé : on court-circuite le SEUL appel au modèle. Tout ce qui suit dans la
-    # chaîne (validation, empreintes, dédup, seuil, posting) tourne pour de vrai.
+    # Fake mode: we short-circuit the ONLY call to the model. Everything that follows in
+    # the pipeline (validation, fingerprints, dedup, threshold, posting) runs for real.
     if config.fake:
         from .fake import review_simulee
         return review_simulee(spec.id, pr_diff)
@@ -297,11 +297,11 @@ def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
                                           model=pick_model(spec), budget=spec.budget(config))
         resultat = parse_review_output(agent_text, metadata)
         if not resultat.parsed_ok:
-            # Le cas le plus opaque : l'agent a répondu, mais hors du contrat de sortie.
-            # Sans cet extrait, on ne voit que « parsed=False, fallback » et on ne peut
-            # rien en conclure.
-            _log.warning("[%s] réponse hors contrat (ni JSON de findings) — début de ce "
-                         "qu'a écrit l'agent : %s", spec.id, scrub_text(agent_text[:400]))
+            # The most opaque case: the agent answered, but outside the output contract.
+            # Without this excerpt, we only see "parsed=False, fallback" and cannot
+            # conclude anything.
+            _log.warning("[%s] off-contract answer (no findings JSON) — start of what "
+                         "the agent wrote: %s", spec.id, scrub_text(agent_text[:400]))
         return resultat
 
     finally:

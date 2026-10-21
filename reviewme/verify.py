@@ -1,28 +1,28 @@
-"""Passe de vérification : un second `claude -p` juge chaque finding avant qu'il soit posté.
+"""Verification pass: a second `claude -p` judges each finding before it is posted.
 
-Le seuil de confiance demande au modèle de noter sa propre remarque. C'est le mécanisme que
-les reviewers qui marchent ont abandonné : l'auto-évaluation par le même appel est presque
-aléatoire. Ce qu'ils font tous (Anthropic, CodeRabbit, Cursor, Qodo) : un AUTRE appel
-reçoit les findings et doit, pour chacun, aller voir le code et trancher confirmé ou
-infirmé, en citant la ligne qui le prouve.
+The confidence threshold asks the model to rate its own comment. That is the mechanism
+reviewers that work have abandoned: self-assessment by the same call is almost random.
+What they all do (Anthropic, CodeRabbit, Cursor, Qodo): ANOTHER call receives the
+findings and must, for each one, go look at the code and decide confirmed or refuted,
+citing the line that proves it.
 
-- Même allowlist que la review (lecture seule) : pas de Write, pas de Task. Ni l'agent
-  `--agent` ni les serveurs MCP du reviewer : le vérificateur a son propre rôle.
-- Il reçoit le même contexte injecté que le reviewer (ticket Jira, faits du precheck) :
-  sans le ticket, « critère 3 non couvert » ne pourrait jamais être confirmé.
-- Un finding non confirmé (infirmé, sans verdict, verdict illisible, ou confirmé sans
-  citation VALIDE) n'est pas posté : il va au registre comme `dropped_unverified`. On
-  préfère rater une remarque (un humain la fera) que poster un faux positif.
-- La citation est contrôlée en Python : `chemin:ligne` d'un fichier qui existe, à une
-  ligne qui existe. Un texte quelconque ne suffit pas à faire passer un finding.
-- Si la passe échoue (CLI en erreur, sortie illisible, plafond de tours avant d'avoir tout
-  jugé), les findings sans verdict passent SANS vérification (`status = error`) et le
-  commentaire le dit : une panne du vérificateur ne doit pas rendre le bot muet.
+- Same allowlist as the review (read-only): no Write, no Task. Neither the `--agent`
+  agent nor the reviewer's MCP servers: the verifier has its own role.
+- It receives the same injected context as the reviewer (Jira ticket, precheck facts):
+  without the ticket, "criterion 3 not covered" could never be confirmed.
+- An unconfirmed finding (refuted, no verdict, unreadable verdict, or confirmed without
+  a VALID citation) is not posted: it goes to the ledger as `dropped_unverified`. We
+  prefer missing a comment (a human will make it) over posting a false positive.
+- The citation is checked in Python: `path:line` of a file that exists, at a line
+  that exists. Arbitrary text is not enough to let a finding through.
+- If the pass fails (CLI error, unreadable output, turn cap before judging
+  everything), findings without a verdict go through WITHOUT verification
+  (`status = error`) and the comment says so: a verifier outage must not silence the bot.
 
-Seuls les findings au-dessus du seuil sont vérifiés : ceux d'en dessous sont déjà écartés.
+Only findings above the threshold are verified: those below are already discarded.
 
-Budget : le vérificateur dispose de ce qui reste du `max_budget_usd` du reviewer après la
-review, et d'un délai plus court. Pire cas par reviewer : 900 s + 450 s.
+Budget: the verifier gets what is left of the reviewer's `max_budget_usd` after the
+review, and a shorter timeout. Worst case per reviewer: 900 s + 450 s.
 """
 from __future__ import annotations
 
@@ -38,10 +38,10 @@ from .scrub import scrub_text
 
 _log = logging.getLogger("reviewme.verify")
 
-#: Statuts qui écartent le finding (`dropped_unverified`).
+#: Statuses that discard the finding (`dropped_unverified`).
 DROP_STATUSES = frozenset({"refuted", "missing", "uncited", "invalid"})
 TIMEOUT_S = 450
-#: Tours : au moins de quoi ouvrir le fichier et chercher pour chaque finding.
+#: Turns: at least enough to open the file and search for each finding.
 TURNS_PER_FINDING = 4
 MAX_TURNS_CAP = 60
 _CITATION = re.compile(r"^\s*`?([\w./+@-]+):(\d+)(?:-\d+)?`?\s*$")
@@ -69,10 +69,10 @@ def build_prompt(pr_number: int, pr_title: str, diff_path: str, findings: list[F
 
 
 def valid_citation(citation: str, repo_path: str, diff_paths: set[str]) -> str:
-    """`chemin:ligne` normalisé si la citation désigne une ligne qui existe, sinon "".
+    """Normalized `path:line` if the citation points to a line that exists, otherwise "".
 
-    Le fichier doit être dans le dépôt (confiné à sa racine) ou dans le diff. C'est ce qui
-    empêche une citation inventée — ou dictée par le diff — de valider un finding.
+    The file must be in the repo (confined to its root) or in the diff. This is what
+    prevents an invented citation — or one dictated by the diff — from validating a finding.
     """
     m = _CITATION.match(citation or "")
     if not m:
@@ -98,11 +98,11 @@ def valid_citation(citation: str, repo_path: str, diff_paths: set[str]) -> str:
 
 def apply_verdicts(findings: list[Finding], text: str, *, repo_path: str = ".",
                    diff_paths: set[str] | None = None, complete: bool = True) -> int:
-    """Pose `verification` sur chaque finding. Renvoie le nombre de verdicts lus, ou -1
-    si la sortie est illisible (les findings restent alors sans verdict).
+    """Sets `verification` on each finding. Returns the number of verdicts read, or -1
+    if the output is unreadable (findings then stay without a verdict).
 
-    `complete=False` : la CLI s'est arrêtée avant la fin (plafond de tours) ; un finding
-    sans verdict n'a pas été jugé, il passe comme non vérifié (`error`).
+    `complete=False`: the CLI stopped before the end (turn cap); a finding without a
+    verdict was not judged, it goes through as unverified (`error`).
     """
     diff_paths = diff_paths or {f.path for f in findings}
     blob = _extract_json_blob(text or "")
@@ -119,7 +119,7 @@ def apply_verdicts(findings: list[Finding], text: str, *, repo_path: str = ".",
         if not isinstance(v, dict):
             continue
         try:
-            by_id.setdefault(int(v.get("id")), v)     # un id en double : le premier compte
+            by_id.setdefault(int(v.get("id")), v)     # duplicate id: the first one counts
         except (TypeError, ValueError):
             continue
 
@@ -136,7 +136,7 @@ def apply_verdicts(findings: list[Finding], text: str, *, repo_path: str = ".",
         except (TypeError, ValueError):
             conf = None
         if verdict == "confirmed":
-            # Confirmé sans citation vérifiable = non prouvé.
+            # Confirmed without a verifiable citation = not proven.
             status = "confirmed" if citation else "uncited"
         elif verdict == "refuted":
             status = "refuted"
@@ -148,11 +148,11 @@ def apply_verdicts(findings: list[Finding], text: str, *, repo_path: str = ".",
 
 
 def _simulated(findings: list[Finding]) -> dict:
-    """Mode simulé : un finding sur deux infirmé, pour voir le filtrage à l'œuvre."""
+    """Fake mode: every other finding refuted, to see the filtering at work."""
     for i, f in enumerate(findings):
         f.verification = {"status": "refuted" if i % 2 else "confirmed", "confidence": 80,
                           "citation": f"{f.path}:{f.line}", "reason": "[SIMULATED]"}
-    return _summary(findings, {"model": "simulé", "cost_usd": 0.0, "duration_ms": 0})
+    return _summary(findings, {"model": "simulated", "cost_usd": 0.0, "duration_ms": 0})
 
 
 def _summary(findings: list[Finding], meta: dict, status: str = "ok") -> dict:
@@ -182,9 +182,9 @@ def _pass_through(findings: list[Finding], meta: dict, status: str) -> dict:
 def verify_findings(pr_number: int, pr_title: str, pr_diff: str, findings: list[Finding],
                     config: Config, spec: ReviewerSpec, *, extra_context: str = "",
                     spent_usd: float = 0.0) -> dict:
-    """Vérifie `findings` (modifiés en place). Renvoie le bilan pour `runs.jsonl`.
+    """Verifies `findings` (modified in place). Returns the summary for `runs.jsonl`.
 
-    `spent_usd` = coût déjà engagé par la review : le vérificateur a le reste du budget.
+    `spent_usd` = cost already spent by the review: the verifier gets the rest of the budget.
     """
     if not findings:
         return {"status": "ok", "candidates": 0, "confirmed": 0, "refuted": 0, "dropped": 0,
@@ -195,8 +195,8 @@ def verify_findings(pr_number: int, pr_title: str, pr_diff: str, findings: list[
     budget = spec.budget(config)
     remaining = budget - spent_usd if budget > 0 else 0.0
     if budget > 0 and remaining <= 0:
-        _log.warning("[%s/verif] budget épuisé par la review — findings postés sans "
-                     "vérification", spec.id)
+        _log.warning("[%s/verif] budget exhausted by the review — findings posted without "
+                     "verification", spec.id)
         return _pass_through(findings, {}, status="no_budget")
 
     from .reviewer import invoke_cli, pick_model, write_diff
@@ -211,7 +211,7 @@ def verify_findings(pr_number: int, pr_title: str, pr_diff: str, findings: list[
                                 budget=remaining, label=label, timeout=TIMEOUT_S,
                                 reviewer_tools=False)
     except Exception as e:
-        _log.warning("[%s] vérification impossible (%s) — findings postés sans vérification",
+        _log.warning("[%s] verification impossible (%s) — findings posted without verification",
                      label, scrub_text(str(e))[:300])
         return _pass_through(findings, {}, status="error")
     finally:
@@ -221,12 +221,12 @@ def verify_findings(pr_number: int, pr_title: str, pr_diff: str, findings: list[
     complete = meta.get("subtype") in ("", "success")
     if apply_verdicts(findings, text, repo_path=config.repo_path,
                       diff_paths=_diff_paths(pr_diff), complete=complete) < 0:
-        _log.warning("[%s] sortie du vérificateur illisible — findings postés sans "
-                     "vérification. Début : %s", label, scrub_text(text[:300]))
+        _log.warning("[%s] unreadable verifier output — findings posted without "
+                     "verification. Start: %s", label, scrub_text(text[:300]))
         return _pass_through(findings, meta, status="error")
 
     bilan = _summary(findings, meta, status="ok" if complete else "partial")
-    _log.info("[%s] %d candidat(s) : %d confirmé(s), %d écarté(s), %d non vérifié(s), $%.4f",
+    _log.info("[%s] %d candidate(s): %d confirmed, %d dropped, %d unverified, $%.4f",
               label, bilan["candidates"], bilan["confirmed"], bilan["dropped"],
               bilan["unverified"], bilan["cost_usd"])
     return bilan

@@ -1,7 +1,7 @@
-"""Configuration ReviewMe (pilotée par .env — le format éprouvé sur 3 mois).
+"""ReviewMe configuration (driven by .env — the format proven over 3 months).
 
-La configuration passe par l'environnement (`.env`) ; le comportement de review passe
-multi-équipes est différé en v2). Les secrets viennent UNIQUEMENT de l'environnement.
+Configuration goes through the environment (`.env`); review behaviour goes
+multi-team is deferred to v2). Secrets come ONLY from the environment.
 """
 from __future__ import annotations
 
@@ -28,37 +28,37 @@ class Config:
     poll_interval: int = 300
     repo_path: str = "."
     max_budget_usd: float = 1.00
-    claude_agent: str = ""  # vide = persona du reviewer ; sinon nom d'un agent Claude Code
-    claude_bin: str = ""    # binaire de la CLI de review. Vide = `claude` du PATH. Permet de
-                            # pointer un wrapper maison (passerelle interne, quotas, logs).
-    # --- ajouts v2 (inline + garde-fous) ---
-    confidence_threshold: int = 80        # findings < seuil non postés (rubrique officielle)
-    bot_login: str = ""                   # login du bot si identité dédiée (sinon vide)
-    # --- ajouts v3 (reviewers multiples, ADR v3) ---
-    # Auth GitHub App (identité dédiée) : si renseignée, elle prime sur le PAT.
+    claude_agent: str = ""  # empty = reviewer persona; otherwise the name of a Claude Code agent
+    claude_bin: str = ""    # review CLI binary. Empty = `claude` from PATH. Allows pointing
+                            # to an in-house wrapper (internal gateway, quotas, logs).
+    # --- v2 additions (inline + safeguards) ---
+    confidence_threshold: int = 80        # findings < threshold not posted (official rubric)
+    bot_login: str = ""                   # bot login if dedicated identity (otherwise empty)
+    # --- v3 additions (multiple reviewers, ADR v3) ---
+    # GitHub App auth (dedicated identity): if set, it takes precedence over the PAT.
     github_app_id: str = ""
     github_app_private_key_path: str = ""
-    github_app_installation_id: str = ""   # vide = résolu depuis le repo cible
-    config_home: str = ""                 # dépôt de config EXTERNE (REVIEWME_CONFIG_HOME) :
-                                          # ses projets priment sur config/projects/ du core
-    project: str = ""                     # nom du dossier <projets>/<nom>. Vide = mode
-                                          # rétro-compatible v0.2 (reviewer unique `tech`).
-    max_comments_per_pr: int = 10         # plafond D6 : tous reviewers confondus, par PR
-    reviewer_id: str = "tech"             # identité du reviewer dans le marqueur de dédup.
-                                          # STABLE dans le temps pour un projet : le renommer
-                                          # ferait reposter tous ses commentaires en double.
-    review_all_prs: bool = False          # False = filtre par label ; True = toute PR ouverte
-    dry_run: bool = False                 # True = ne poste rien, log seulement
-    fake: bool = False                    # True = aucun appel au LLM (mise au point CI)
-    debug: bool = False                   # True = journalise l'invocation et l'enveloppe CLI
-    verify: bool = True                   # passe de vérification (REVIEWME_VERIFY=0 la coupe
-                                          # partout, ex. pour une chaîne témoin)
-    config_from_base: bool = True         # config sous REPO_PATH lue sur origin/<base>
-    config_source: str = "base"           # base | pr (cf. `config_source_env`)
-    baseline: bool = False                # chaîne TÉMOIN (REVIEWME_BASELINE) : le comportement
-                                          # d'avant la mesure, en dry-run, pour comparer
-    inline_min_severity: str = "IMPORTANT"  # sévérité minimale postée EN LIGNE ; en dessous,
-                                            # la remarque va dans le résumé. MINOR = tout inline
+    github_app_installation_id: str = ""   # empty = resolved from the target repo
+    config_home: str = ""                 # EXTERNAL config repo (REVIEWME_CONFIG_HOME):
+                                          # its projects take precedence over the core's config/projects/
+    project: str = ""                     # name of the <projects>/<name> folder. Empty = v0.2
+                                          # backward-compatible mode (single `tech` reviewer).
+    max_comments_per_pr: int = 10         # D6 cap: all reviewers combined, per PR
+    reviewer_id: str = "tech"             # reviewer identity in the dedup marker.
+                                          # STABLE over time for a project: renaming it
+                                          # would repost all its comments as duplicates.
+    review_all_prs: bool = False          # False = filter by label; True = every open PR
+    dry_run: bool = False                 # True = posts nothing, logs only
+    fake: bool = False                    # True = no LLM call (CI tuning)
+    debug: bool = False                   # True = logs the invocation and the CLI envelope
+    verify: bool = True                   # verification pass (REVIEWME_VERIFY=0 turns it off
+                                          # everywhere, e.g. for a baseline pipeline)
+    config_from_base: bool = True         # config under REPO_PATH read from origin/<base>
+    config_source: str = "base"           # base | pr (see `config_source_env`)
+    baseline: bool = False                # BASELINE pipeline (REVIEWME_BASELINE): the behaviour
+                                          # from before measurement, in dry-run, to compare
+    inline_min_severity: str = "IMPORTANT"  # minimum severity posted INLINE; below it,
+                                            # the comment goes into the summary. MINOR = all inline
 
     @property
     def repo_owner(self) -> str:
@@ -74,8 +74,8 @@ class Config:
 
     @property
     def api_headers(self) -> dict[str, str]:
-        """En-têtes de base. L'`Authorization` est réécrite à chaque requête par le client
-        (le token d'une GitHub App expire au bout d'une heure)."""
+        """Base headers. `Authorization` is rewritten on each request by the client
+        (a GitHub App token expires after one hour)."""
         return {
             "Authorization": f"Bearer {self.github_token}",
             "Accept": "application/vnd.github+json",
@@ -84,10 +84,10 @@ class Config:
 
 
 def _severity_env(name: str, default: str) -> str:
-    """Sévérité lue strictement : une faute de frappe ne doit pas tout envoyer en ligne."""
+    """Severity read strictly: a typo must not send everything inline."""
     val = (os.environ.get(name) or default).strip().upper()
     if val not in SEVERITIES:
-        raise RuntimeError(f"{name}={val!r} invalide (attendu : {', '.join(SEVERITIES)})")
+        raise RuntimeError(f"{name}={val!r} invalid (expected: {', '.join(SEVERITIES)})")
     return val
 
 
@@ -98,18 +98,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: Variables JAMAIS lues depuis le `.env` d'une instance : elles décident de ce qui est
-#: exécuté ou de l'endroit où l'on s'authentifie. Une config peut venir d'un dépôt tiers.
+#: Variables NEVER read from an instance's `.env`: they decide what gets executed or
+#: where authentication happens. A config can come from a third-party repo.
 INSTANCE_ENV_DENYLIST = frozenset({
-    "CLAUDE_BIN",                   # binaire lancé comme moteur de review -> RCE
+    "CLAUDE_BIN",                   # binary launched as the review engine -> RCE
     "CLAUDE_AGENT",
-    "REPO_PATH",                    # dépôt exploré par l'agent
-    "REVIEWME_CONFIG_HOME",         # redirection de la config elle-même
-    "REVIEWME_CONFIG_FROM_BASE",    # une PR ne choisit pas de relire avec SA config
+    "REPO_PATH",                    # repo explored by the agent
+    "REVIEWME_CONFIG_HOME",         # redirection of the config itself
+    "REVIEWME_CONFIG_FROM_BASE",    # a PR does not choose to be reviewed with ITS config
     "REVIEWME_CONFIG_SOURCE",
-    "REVIEWME_TRUSTED_BASES",       # ni la branche d'où sa config est lue
-    "FETCH_BASE_TIMEOUT",           # 0 = plus d'origin/<base>, donc plus de review
-    "ANTHROPIC_BASE_URL",           # redirection du trafic modèle
+    "REVIEWME_TRUSTED_BASES",       # nor the branch its config is read from
+    "FETCH_BASE_TIMEOUT",           # 0 = no more origin/<base>, hence no more review
+    "ANTHROPIC_BASE_URL",           # redirection of model traffic
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "GITHUB_TOKEN",
@@ -119,9 +119,9 @@ INSTANCE_ENV_DENYLIST = frozenset({
 
 
 def _load_instance_env(path: Path) -> None:
-    """Charge le `.env` d'une instance, en écartant les variables sensibles.
+    """Loads an instance's `.env`, discarding sensitive variables.
 
-    On ne fait PAS confiance à ce fichier : il peut arriver par une Pull Request.
+    This file is NOT trusted: it can arrive through a Pull Request.
     """
     if not path.is_file():
         return
@@ -129,14 +129,14 @@ def _load_instance_env(path: Path) -> None:
     for key, value in values.items():
         if value is None or key in INSTANCE_ENV_DENYLIST:
             continue
-        os.environ.setdefault(key, value)   # ne surcharge jamais l'environnement du job
+        os.environ.setdefault(key, value)   # never overrides the job's environment
 
 
 def _config_in_reviewed_repo(home: str) -> bool:
-    """La config vit-elle sous `REPO_PATH` (donc dans le checkout de la PR) ?
+    """Does the config live under `REPO_PATH` (hence in the PR's checkout)?
 
-    Comparaison SANS résoudre les liens : un `.reviewme` devenu lien symbolique vers
-    l'extérieur reste « dans le dépôt », il ne doit pas passer pour une config externe.
+    Comparison WITHOUT resolving links: a `.reviewme` turned into a symlink to the
+    outside stays "in the repo"; it must not pass for an external config.
     """
     if config_source_env() == "pr":
         return False
@@ -150,39 +150,39 @@ CONFIG_SOURCES = ("base", "pr")
 
 
 def config_source_env() -> str:
-    """D'où lire la config d'un projet qui vit dans le dépôt relu (`.reviewme/`).
+    """Where to read the config of a project that lives in the reviewed repo (`.reviewme/`).
 
-    - `base` (défaut) : sur la branche de base. Une PR ne change pas sa propre relecture.
-    - `pr` : sur la PR elle-même. Pour tester un nouveau reviewer avant de le merger, en
-      lançant un build à la main avec cette variable ; à éviter comme réglage permanent.
+    - `base` (default): from the base branch. A PR does not change its own review.
+    - `pr`: from the PR itself. To test a new reviewer before merging it, by running a
+      build manually with this variable; avoid as a permanent setting.
 
-    Réglage du JOB uniquement (jamais lu du `.env` d'une instance). `REVIEWME_CONFIG_FROM_BASE=0`
-    reste accepté comme synonyme de `pr`.
+    JOB setting only (never read from an instance's `.env`). `REVIEWME_CONFIG_FROM_BASE=0`
+    is still accepted as a synonym of `pr`.
     """
     val = os.environ.get("REVIEWME_CONFIG_SOURCE", "").strip().lower()
     if not val:
         return "base" if _env_bool("REVIEWME_CONFIG_FROM_BASE", True) else "pr"
     if val not in CONFIG_SOURCES:
-        raise RuntimeError(f"REVIEWME_CONFIG_SOURCE={val!r} invalide "
-                           f"(attendu : {', '.join(CONFIG_SOURCES)})")
+        raise RuntimeError(f"REVIEWME_CONFIG_SOURCE={val!r} invalid "
+                           f"(expected: {', '.join(CONFIG_SOURCES)})")
     return val
 
 
 def load_config(*, require_repo: bool = True) -> Config:
-    # Le .env de l'INSTANCE prime sur celui du moteur : une instance porte son repo cible,
-    # son token et ses réglages. `load_dotenv` n'écrase jamais une variable déjà posée,
-    # donc l'ordre fait la priorité.
+    # The INSTANCE's .env takes precedence over the engine's: an instance carries its
+    # target repo, its token and its settings. `load_dotenv` never overwrites an already
+    # set variable, so the order defines the priority.
     #
-    # SÉCURITÉ : ce fichier peut venir d'un dépôt que l'on est en train de REVIEWER (config
-    # dans `.reviewme/`), donc d'une PR écrite par un tiers. Les variables qui décident
-    # QUOI EXÉCUTER en sont exclues : sans ce filtre, une PR ajoutant `.reviewme/.env` avec
-    # `CLAUDE_BIN=/bin/sh` obtient l'exécution de code arbitraire dans un job qui porte les
-    # secrets de la CI. Ces variables ne se règlent que dans l'environnement du job.
+    # SECURITY: this file can come from a repo we are currently REVIEWING (config in
+    # `.reviewme/`), hence from a PR written by a third party. Variables that decide
+    # WHAT TO EXECUTE are excluded: without this filter, a PR adding `.reviewme/.env` with
+    # `CLAUDE_BIN=/bin/sh` gets arbitrary code execution in a job that holds the CI
+    # secrets. These variables can only be set in the job's environment.
     #
-    # Et quand la config vit DANS le dépôt relu (lue sur la branche de base, cf.
-    # `run.config_from_base`), ce `.env` est celui de la PR : même filtré, il pourrait
-    # couper sa propre relecture (`DRY_RUN`, `CONFIDENCE_THRESHOLD=101`…). Il n'est alors
-    # pas lu du tout ; les réglages passent par l'environnement du job.
+    # And when the config lives IN the reviewed repo (read from the base branch, see
+    # `run.config_from_base`), this `.env` is the PR's: even filtered, it could turn off
+    # its own review (`DRY_RUN`, `CONFIDENCE_THRESHOLD=101`…). It is then not read at
+    # all; settings go through the job's environment.
     home = os.environ.get("REVIEWME_CONFIG_HOME", "").strip()
     if home and not _config_in_reviewed_repo(home):
         _load_instance_env(Path(home).expanduser() / ".env")
@@ -193,16 +193,17 @@ def load_config(*, require_repo: bool = True) -> Config:
     app_key = os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH", "")
     if not token and not (app_id and app_key):
         raise RuntimeError(
-            "Aucune authentification GitHub : définir GITHUB_TOKEN (PAT), ou "
+            "No GitHub authentication: set GITHUB_TOKEN (PAT), or "
             "GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY_PATH (GitHub App).")
 
     repo = os.environ.get("GITHUB_REPO", "")
     if require_repo and not repo:
-        raise RuntimeError("GITHUB_REPO non défini (env ou .env)")
+        raise RuntimeError("GITHUB_REPO not set (env or .env)")
 
-    # Chaîne témoin : rejoue le comportement d'avant (une passe, seuil seul, tout en ligne,
-    # sans méthode du core ni lecture auto ni tag « préexistant ») sur les mêmes PR, sans
-    # rien poster. Le seuil vient de CONFIDENCE_THRESHOLD comme d'habitude (70 à l'époque).
+    # Baseline pipeline: replays the previous behaviour (one pass, threshold only, all
+    # inline, no core method, no auto reading, no "pre-existing" tag) on the same PRs,
+    # without posting anything. The threshold comes from CONFIDENCE_THRESHOLD as usual
+    # (70 at the time).
     baseline = _env_bool("REVIEWME_BASELINE", False)
 
     return Config(

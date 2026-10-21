@@ -1,101 +1,101 @@
-# Déploiement Bitrise
+# Bitrise deployment
 
-Bitrise **orchestre**, ReviewMe fait la review one-shot. Le workflow est hors `trigger_map`
-et se déclenche par l'API Build Trigger, ou sur un trigger `pull_request` selon ce que
-veut l'équipe.
+Bitrise **orchestrates**, ReviewMe does the one-shot review. The workflow is outside the `trigger_map`
+and is started through the Build Trigger API, or on a `pull_request` trigger depending on what
+the team wants.
 
-## Un runner Linux, même sur une app iOS
+## A Linux runner, even for an iOS app
 
-La review **ne compile rien** : elle lit un diff et des fichiers texte. Elle n'a besoin ni de
-Xcode, ni d'un simulateur, ni du toolchain Swift. Un stack macOS n'apporterait rien et coûte
-nettement plus cher à la minute.
+The review **compiles nothing**: it reads a diff and text files. It needs neither
+Xcode, nor a simulator, nor the Swift toolchain. A macOS stack would bring nothing and costs
+noticeably more per minute.
 
-Bitrise permet de surcharger le stack **par workflow**, y compris dans une app iOS dont le
-stack par défaut est macOS :
+Bitrise lets you override the stack **per workflow**, including in an iOS app whose
+default stack is macOS:
 
 ```yaml
   ReviewMe:
-    summary: Review IA de la PR courante (commentaires inline)
+    summary: AI review of the current PR (inline comments)
     meta:
       bitrise.io:
-        stack: ubuntu-noble-24.04-bitrise-2025    # pas de Xcode nécessaire
+        stack: ubuntu-noble-24.04-bitrise-2025    # no Xcode needed
         machine_type_id: g2.linux.medium
     steps:
     - activate-ssh-key@4: {}
-    - git-clone@8: {}                             # clone le repo à reviewer
+    - git-clone@8: {}                             # clones the repo to review
     - script@1:
         title: ReviewMe
         inputs:
         - content: |
             #!/usr/bin/env bash
-            set -eo pipefail        # PAS de `set -x` : ce step manipule des secrets
+            set -eo pipefail        # NO `set -x`: this step handles secrets
 
-            # 1. Outils, en versions ÉPINGLÉES et vérifiées — ce job porte des secrets.
-            npm install -g "@anthropic-ai/claude-code@<version>"   # npm vérifie l'intégrité
-            # uv : archive de release + SHA256 publié par l'éditeur (voir le bitrise.yml de votre application)
+            # 1. Tools, in PINNED and verified versions — this job carries secrets.
+            npm install -g "@anthropic-ai/claude-code@<version>"   # npm checks integrity
+            # uv: release archive + SHA256 published by the vendor (see your app's bitrise.yml)
             export PATH="$HOME/.local/bin:$PATH"
             echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
 
-            # 2. La config : un seul clone, le moteur vient avec (submodule .core)
+            # 2. The config: a single clone, the engine comes with it (.core submodule)
             git clone --recurse-submodules "$REVIEWME_INSTANCE_URL" /tmp/reviewme-config
 
             # 3. Review
             cd /tmp/reviewme-config
             ./reviewme review --repo "$GITHUB_REPO" --pr "$PR_NUMBER"
-        # Secrets : jamais en clair ici, déclarés dans les Secrets Bitrise de l'app
+        # Secrets: never in clear text here, declared in the app's Bitrise Secrets
 ```
 
-## Variante la plus simple : la config dans le dépôt reviewé
+## Simplest variant: the config lives in the reviewed repository
 
-Si le projet porte sa propre configuration (`.reviewme/` à sa racine), il n'y a **rien à
-cloner en plus** : le dépôt est déjà là, on pointe dedans.
+If the project carries its own configuration (`.reviewme/` at its root), there is **nothing
+extra to clone**: the repository is already there, just point into it.
 
 ```bash
-# 1. Outils
+# 1. Tools
 curl -fsSL https://claude.ai/install.sh | bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
-# 2. Le moteur (dépôt public, aucun credential)
-# Épingler un COMMIT, pas une branche ni un tag : un tag est déplaçable.
-git clone --quiet --filter=blob:none --no-checkout <url-du-moteur> /tmp/reviewme
-git -C /tmp/reviewme checkout --quiet <sha-complet>
+# 2. The engine (public repository, no credentials)
+# Pin a COMMIT, not a branch or a tag: a tag can be moved.
+git clone --quiet --filter=blob:none --no-checkout <engine-url> /tmp/reviewme
+git -C /tmp/reviewme checkout --quiet <full-sha>
 cd /tmp/reviewme && uv sync --frozen
 
-# 3. La config vient du dépôt reviewé
+# 3. The config comes from the reviewed repository
 export REVIEWME_CONFIG_HOME="$BITRISE_SOURCE_DIR/.reviewme"
-export PROJECT=mon-projet
+export PROJECT=my-project
 export REPO_PATH="$BITRISE_SOURCE_DIR"
 uv run reviewme review --pr "$PR"
 ```
 
-⚠️ Protéger `.reviewme/` par une entrée `CODEOWNERS` : sans ça, une PR peut modifier la
-configuration qui la juge.
+⚠️ Protect `.reviewme/` with a `CODEOWNERS` entry: without it, a PR can modify the
+configuration that judges it.
 
 ## Variables
 
-| Variable | Origine | Rôle |
+| Variable | Source | Role |
 |---|---|---|
-| `GITHUB_TOKEN` | Secret Bitrise | PR R/W sur le repo cible (ou GitHub App, cf. `GITHUB_APP_*`) |
-| `ANTHROPIC_API_KEY` | Secret Bitrise | Moteur de review. Via une passerelle interne : `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` |
-| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `1` | Les proxies internes rejettent souvent les en-têtes de prompt caching |
-| `REVIEWME_INSTANCE_URL` | Env du workflow | Le dépôt de config (avec le moteur en submodule `.core`) |
-| `PROJECT` | Env du workflow | Quel projet de l'instance utiliser |
-| `REPO_PATH` | `$BITRISE_SOURCE_DIR` | Le clone à explorer pour contextualiser les findings |
-| `PR_NUMBER` | `$BITRISE_PULL_REQUEST` | La PR à reviewer |
+| `GITHUB_TOKEN` | Bitrise Secret | PR R/W on the target repo (or GitHub App, see `GITHUB_APP_*`) |
+| `ANTHROPIC_API_KEY` | Bitrise Secret | Review engine. Through an internal gateway: `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `1` | Internal proxies often reject the prompt caching headers |
+| `REVIEWME_INSTANCE_URL` | Workflow env | The config repository (with the engine as the `.core` submodule) |
+| `PROJECT` | Workflow env | Which project of the instance to use |
+| `REPO_PATH` | `$BITRISE_SOURCE_DIR` | The clone to explore to put findings in context |
+| `PR_NUMBER` | `$BITRISE_PULL_REQUEST` | The PR to review |
 
-## Runner éphémère : ce que ça implique
+## Ephemeral runner: what it implies
 
-| | Effet |
+| | Effect |
 |---|---|
-| **Dédup des commentaires** | Aucun. La vérité est GitHub : les marqueurs vivent dans les commentaires de la PR, pas sur le disque du runner. |
-| **`data/state.json`** | Perdu à chaque build. Conséquence : une **relance sur le même commit** repaie une review qui ne postera rien (tout dédupliqué). Sur un nouveau commit, aucun impact. |
-| **Dashboard / hall of fame** | Ne fonctionne pas : il lit `data/reviews/*.json`, effacé avec le runner. Il faut un store partagé — chantier séparé. |
+| **Comment dedup** | None. GitHub is the source of truth: the markers live in the PR comments, not on the runner's disk. |
+| **`data/state.json`** | Lost on every build. Consequence: a **rerun on the same commit** pays again for a review that will post nothing (everything deduplicated). On a new commit, no impact. |
+| **Dashboard / hall of fame** | Does not work: it reads `data/reviews/*.json`, wiped with the runner. It needs a shared store — a separate project. |
 
-Ne **pas** exporter `data/` en artifact de build pour contourner : les artifacts sont
-téléchargeables par quiconque a accès au build, et `data/` contient le contenu de PR réelles.
+Do **not** export `data/` as a build artifact to work around it: artifacts can be
+downloaded by anyone with access to the build, and `data/` contains the content of real PRs.
 
-## Premier branchement
+## First hookup
 
-Lancer avec `--dry-run` sur quelques PR, lire ce qui *aurait* été posté, ajuster
-`CONFIDENCE_THRESHOLD` et `MAX_COMMENTS_PER_PR`, et seulement ensuite retirer le flag.
+Run with `--dry-run` on a few PRs, read what *would* have been posted, tune
+`CONFIDENCE_THRESHOLD` and `MAX_COMMENTS_PER_PR`, and only then remove the flag.

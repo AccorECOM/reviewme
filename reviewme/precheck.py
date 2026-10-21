@@ -1,20 +1,20 @@
-"""Prechecks déterministes (ADR v3 D7) : établir des FAITS avant d'appeler le LLM.
+"""Deterministic prechecks (ADR v3 D7): establish FACTS before calling the LLM.
 
-Principe : ce qu'un script sait prouver ne doit pas être payé à un modèle. « La clé
-`checkout.title` existe en `fr` et manque en `de` » est un fait vérifiable, gratuit et
-sans faux positif ; le LLM n'intervient que sur ce qui demande du jugement (wording, ton,
-variable non substituée, cohérence avec l'existant).
+Principle: what a script can prove should not be paid to a model. "The key
+`checkout.title` exists in `fr` and is missing in `de`" is a verifiable fact, free and
+with no false positive; the LLM only steps in where judgment is needed (wording, tone,
+unsubstituted variable, consistency with existing code).
 
-Un reviewer déclare son script dans `reviewer.toml` :
+A reviewer declares its script in `reviewer.toml`:
 
     precheck = "precheck.py"
 
-Le script vit dans le dossier du reviewer. Il reçoit le dépôt via `--repo`, **le diff de la
-PR sur stdin**, et écrit sur stdout un bloc markdown injecté tel quel dans le prompt.
+The script lives in the reviewer's folder. It receives the repo via `--repo`, **the PR
+diff on stdin**, and writes to stdout a markdown block injected as-is into the prompt.
 
-⚠️ SÉCURITÉ : un precheck est du CODE fourni par le projet, exécuté par le core. Sur une
-config contribuée par des équipes, il doit passer par la même revue qu'un changement de
-code (cf. ADR v3 D10) et le sandbox de déploiement reste la mitigation de fond.
+⚠️ SECURITY: a precheck is CODE supplied by the project, executed by the core. On a
+config contributed by teams, it must go through the same review as a code change
+(see ADR v3 D10), and the deployment sandbox remains the underlying mitigation.
 """
 from __future__ import annotations
 
@@ -26,51 +26,51 @@ from .config import Config
 from .projects import ReviewerSpec
 
 _TIMEOUT_S = 120
-_MAX_OUTPUT = 20_000  # au-delà, ce n'est plus un « fait établi » mais un dump : on tronque
+_MAX_OUTPUT = 20_000  # beyond this it is no longer an "established fact" but a dump: truncate
 
 
 def run_precheck(spec: ReviewerSpec, config: Config, logger: logging.Logger,
                  diff: str = "") -> str:
-    """Exécute le precheck du reviewer. Renvoie son bloc de faits, ou "" si indisponible.
+    """Run the reviewer's precheck. Returns its facts block, or "" if unavailable.
 
-    Ne lève jamais : un precheck cassé dégrade la review (le LLM juge seul), il ne
-    l'interrompt pas.
+    Never raises: a broken precheck degrades the review (the LLM judges alone), it does
+    not interrupt it.
     """
     if not spec.precheck or spec.directory is None:
         return ""
 
-    # Le chemin est CONFINÉ au dossier du reviewer : une config peut venir d'un dépôt tiers
-    # (config dans `.reviewme/`), et `precheck = "../../../quelque-chose.sh"` ferait exécuter
-    # un fichier arbitraire du dépôt dans un job qui porte les secrets de la CI.
+    # The path is CONFINED to the reviewer's folder: a config can come from a third-party repo
+    # (config in `.reviewme/`), and `precheck = "../../../something.sh"` would execute an
+    # arbitrary file from the repo in a job that holds the CI secrets.
     base = spec.directory.resolve()
     try:
         script = (base / spec.precheck).resolve()
         script.relative_to(base)
     except (ValueError, OSError):
-        logger.warning("[%s] precheck refusé : '%s' sort du dossier du reviewer",
+        logger.warning("[%s] precheck refused: '%s' escapes the reviewer folder",
                        spec.id, spec.precheck)
         return ""
     if not script.is_file():
-        logger.warning("[%s] precheck '%s' introuvable (%s)", spec.id, spec.precheck, script)
+        logger.warning("[%s] precheck '%s' not found (%s)", spec.id, spec.precheck, script)
         return ""
 
     cmd = ([sys.executable, str(script)] if script.suffix == ".py" else [str(script)])
     cmd += ["--repo", config.repo_path]
 
-    # Le diff est passé sur stdin : un precheck peut ainsi juger ce que la PR CHANGE, pas
-    # seulement l'état du dépôt. Un script qui ne le lit pas n'est pas gêné.
+    # The diff is passed on stdin: a precheck can thus judge what the PR CHANGES, not just
+    # the state of the repo. A script that does not read it is not affected.
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, input=diff or "",
                               timeout=_TIMEOUT_S, cwd=config.repo_path, check=False)
     except subprocess.TimeoutExpired:
-        logger.warning("[%s] precheck : timeout après %ds", spec.id, _TIMEOUT_S)
+        logger.warning("[%s] precheck: timeout after %ds", spec.id, _TIMEOUT_S)
         return ""
     except OSError as e:
-        logger.warning("[%s] precheck : impossible de lancer %s (%s)", spec.id, script.name, e)
+        logger.warning("[%s] precheck: cannot launch %s (%s)", spec.id, script.name, e)
         return ""
 
     if proc.returncode != 0:
-        logger.warning("[%s] precheck : code %s — %s", spec.id, proc.returncode,
+        logger.warning("[%s] precheck: exit code %s — %s", spec.id, proc.returncode,
                        (proc.stderr or "").strip()[:300])
         return ""
 
@@ -78,8 +78,8 @@ def run_precheck(spec: ReviewerSpec, config: Config, logger: logging.Logger,
     if not out:
         return ""
     if len(out) > _MAX_OUTPUT:
-        logger.info("[%s] precheck : sortie tronquée (%d car.)", spec.id, len(out))
+        logger.info("[%s] precheck: output truncated (%d chars)", spec.id, len(out))
         out = out[:_MAX_OUTPUT] + "\n\n_(output truncated)_"
 
-    logger.info("[%s] precheck : %d car. de faits établis injectés", spec.id, len(out))
+    logger.info("[%s] precheck: %d chars of established facts injected", spec.id, len(out))
     return f"# Facts established by deterministic analysis (reliable — produced by our tooling)\n\n{out}"

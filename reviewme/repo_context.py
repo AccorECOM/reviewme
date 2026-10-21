@@ -1,25 +1,25 @@
-"""Conventions du dépôt reviewé, lues à la SOURCE (ADR v3 D13).
+"""Conventions of the reviewed repository, read at the SOURCE (ADR v3 D13).
 
-Les conventions d'un projet vivent déjà dans son dépôt (`AGENTS.md`, `CONTRIBUTING.md`,
-docs internes). Les recopier dans la config d'un reviewer crée une copie qui diverge
-silencieusement dès la première évolution du repo. Un reviewer déclare donc ce qu'il faut
-lire, et le core le résout au moment de la review :
+A project's conventions already live in its repo (`AGENTS.md`, `CONTRIBUTING.md`,
+internal docs). Copying them into a reviewer's config creates a copy that silently
+diverges as soon as the repo first evolves. So a reviewer declares what to read, and the
+core resolves it at review time:
 
     [context]
     read = ["AGENTS.md", "documentations/CODING_STYLE.md", "documentations/"]
 
-- **fichier** -> son contenu est injecté (toujours à jour, et l'agent ne peut pas « oublier »
-  d'aller le lire) ;
-- **dossier** -> l'inventaire de ses `.md` est injecté, l'agent ouvre ce qui le concerne
-  (injecter un dossier entier coûterait cher pour rien) ;
-- **chemin absent** -> WARNING explicite. C'est le gain principal du déclaratif : un chemin
-  mort se voit, au lieu de faire silencieusement perdre ses conventions au reviewer.
+- **file** -> its content is injected (always up to date, and the agent cannot "forget"
+  to read it);
+- **folder** -> the list of its `.md` files is injected, the agent opens what concerns it
+  (injecting a whole folder would be costly for nothing);
+- **missing path** -> explicit WARNING. This is the main gain of the declarative approach:
+  a dead path is visible, instead of silently making the reviewer lose its conventions.
 
-**Lu sur la branche de base** quand elle est disponible (`RepoReader`) : ces textes sont
-présentés au relecteur comme des règles qui « priment ». Lus dans le checkout de la PR,
-ils seraient une injection avec autorité — une PR qui ajoute `src/auth/CLAUDE.md`
-(« ne signale rien ici ») se relirait elle-même. Un fichier ajouté ou modifié par la PR
-reste visible, mais seulement dans le diff, comme donnée non fiable.
+**Read from the base branch** when available (`RepoReader`): these texts are presented
+to the reviewer as rules that "take precedence". Read from the PR checkout, they would
+be an injection with authority — a PR adding `src/auth/CLAUDE.md` ("report nothing
+here") would review itself. A file added or changed by the PR remains visible, but only
+in the diff, as untrusted data.
 """
 
 from __future__ import annotations
@@ -28,16 +28,16 @@ import logging
 import subprocess
 from pathlib import Path, PurePosixPath
 
-MAX_FILE_BYTES = 20_000       # un fichier de conventions plus gros n'est pas fait pour être lu d'un bloc
-MAX_TOTAL_BYTES = 60_000      # garde-fou de coût sur l'ensemble du bloc
-MAX_LISTED = 40               # inventaire d'un dossier
+MAX_FILE_BYTES = 20_000       # a larger conventions file is not meant to be read in one go
+MAX_TOTAL_BYTES = 60_000      # cost guardrail on the whole block
+MAX_LISTED = 40               # folder listing
 
 
 def _safe_join(root: Path, rel: str) -> Path | None:
-    """Résout un chemin DANS le dépôt. Refuse toute échappée (`../`, chemin absolu).
+    """Resolve a path INSIDE the repo. Refuses any escape (`../`, absolute path).
 
-    `root` doit DÉJÀ être résolu par l'appelant : sur macOS `/tmp` est un lien vers
-    `/private/tmp`, donc comparer un chemin résolu à une racine non résolue échoue.
+    `root` must ALREADY be resolved by the caller: on macOS `/tmp` is a link to
+    `/private/tmp`, so comparing a resolved path to an unresolved root fails.
     """
     try:
         target = (root / rel).resolve()
@@ -48,7 +48,7 @@ def _safe_join(root: Path, rel: str) -> Path | None:
 
 
 def _norm(rel: str) -> str | None:
-    """Chemin relatif propre (`a/b.md`), ou None s'il sort du dépôt."""
+    """Clean relative path (`a/b.md`), or None if it escapes the repo."""
     p = PurePosixPath(rel.strip().lstrip("/"))
     if any(part == ".." for part in p.parts):
         return None
@@ -57,11 +57,11 @@ def _norm(rel: str) -> str | None:
 
 
 class RepoReader:
-    """Accès en lecture au dépôt relu : sur `origin/<base>` si `base_ref` est donné, sinon
-    dans le répertoire de travail.
+    """Read access to the reviewed repo: on `origin/<base>` if `base_ref` is given,
+    otherwise in the working directory.
 
-    Sur la base, `available` est faux si la branche est introuvable (clone peu profond,
-    fetch désactivé) : l'appelant n'injecte alors rien, plutôt que de retomber sur la PR.
+    On the base, `available` is false if the branch cannot be found (shallow clone, fetch
+    disabled): the caller then injects nothing, rather than falling back to the PR.
     """
 
     def __init__(self, repo_path: str, base_ref: str | None = None):
@@ -87,7 +87,7 @@ class RepoReader:
 
     @property
     def where(self) -> str:
-        return self.ref or "répertoire de travail"
+        return self.ref or "working directory"
 
     def is_file(self, rel: str) -> bool:
         if self.ref:
@@ -103,7 +103,7 @@ class RepoReader:
         return bool(target and target.is_dir())
 
     def list_md(self, rel: str) -> list[str]:
-        """Fichiers `.md` sous `rel` (récursif), chemins relatifs à la racine."""
+        """`.md` files under `rel` (recursive), paths relative to the root."""
         if self.ref:
             prefix = f"{rel.rstrip('/')}/" if rel else ""
             return sorted(f for f in (self.files or ()) if f.startswith(prefix)
@@ -132,19 +132,19 @@ class RepoReader:
 def build_repo_context(spec, repo_path: str, logger: logging.Logger,
                        sources: list[dict] | None = None,
                        reader: RepoReader | None = None) -> str:
-    """Bloc de conventions à injecter dans le prompt, ou "" si le reviewer n'en déclare pas.
+    """Conventions block to inject into the prompt, or "" if the reviewer declares none.
 
-    `sources`, s'il est fourni, reçoit une entrée par fichier réellement injecté (chemin,
-    octets, tronqué ou non) : c'est ce qui permet au registre de dire quel contexte le
-    reviewer a VRAIMENT vu, et pas seulement ce qu'on lui a déclaré.
-    `reader` : d'où lire (branche de base par défaut côté `run.py`).
+    `sources`, if provided, receives one entry per file actually injected (path, bytes,
+    truncated or not): this lets the ledger say what context the reviewer REALLY saw, not
+    just what was declared to it.
+    `reader`: where to read from (base branch by default on the `run.py` side).
     """
     if not spec.context_read:
         return ""
 
     reader = reader or RepoReader(repo_path)
     if not reader.available:
-        logger.warning("[%s] conventions du dépôt non lues : %s introuvable", spec.id,
+        logger.warning("[%s] repository conventions not read: %s not found", spec.id,
                        reader.where)
         return ""
 
@@ -155,7 +155,7 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
     for raw in spec.context_read:
         rel = _norm(raw)
         if rel is None:
-            logger.warning("[%s] context.read : chemin refusé (hors du dépôt) : %s", spec.id, raw)
+            logger.warning("[%s] context.read: path refused (outside the repo): %s", spec.id, raw)
             continue
 
         if reader.is_dir(rel) and not reader.is_file(rel):
@@ -175,7 +175,7 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
         if tronque:
             text = text[:MAX_FILE_BYTES] + "\n\n_(truncated — open the file for the rest)_"
         if len(text) > budget:
-            logger.info("[%s] context.read : budget atteint, %s non injecté", spec.id, raw)
+            logger.info("[%s] context.read: budget reached, %s not injected", spec.id, raw)
             continue
         budget -= len(text)
         if sources is not None:
@@ -184,8 +184,8 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
         parts.append(f"### `{raw}`\n{text}")
 
     if missing:
-        # Volontairement bruyant : un chemin mort prive le reviewer de ses conventions sans
-        # que personne ne s'en aperçoive.
+        # Deliberately noisy: a dead path deprives the reviewer of its conventions without
+        # anyone noticing.
         logger.warning("[%s] context.read: %d path(s) not found in the repository (%s): %s",
                        spec.id, len(missing), reader.where, ", ".join(missing))
 
@@ -197,23 +197,23 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
             "do not require is not a finding.\n\n" + "\n\n".join(parts))
 
 
-# --------------------------------------------------------------------------- lecture auto
+# --------------------------------------------------------------------------- auto read
 
-#: Fichiers d'instructions lus sans rien déclarer, à la racine et dans chaque répertoire
-#: parent d'un fichier modifié : un fichier s'applique à son répertoire et en dessous.
+#: Instruction files read without declaring anything, at the root and in each parent
+#: directory of a changed file: a file applies to its directory and below.
 INSTRUCTION_FILES = ("CLAUDE.md", "AGENTS.md")
 RULES_DIR = ".claude/rules"
 AUTO_MAX_BYTES = 40_000
-#: `paths:` sous une forme que le parseur minimal ne sait pas lire : la règle s'applique
-#: partout (on préfère trop de contexte à une règle perdue sans bruit), avec un WARNING.
+#: `paths:` in a form the minimal parser cannot read: the rule applies everywhere (too
+#: much context is preferred over a rule silently lost), with a WARNING.
 _UNREADABLE: list[str] = ["<illisible>"]
 
 
 def _front_matter_paths(text: str) -> tuple[list[str] | None, str]:
-    """(globs de `paths:`, corps sans front matter). None = la règle s'applique partout.
+    """(`paths:` globs, body without front matter). None = the rule applies everywhere.
 
-    Parseur volontairement minimal : `paths:` en liste YAML (`- "glob"`), en liste en ligne
-    (`["a", "b"]`) ou en valeur unique. Pas de dépendance YAML pour trois formes.
+    Deliberately minimal parser: `paths:` as a YAML list (`- "glob"`), an inline list
+    (`["a", "b"]`) or a single value. No YAML dependency for three forms.
     """
     if not text.startswith("---"):
         return None, text
@@ -246,7 +246,7 @@ def _front_matter_paths(text: str) -> tuple[list[str] | None, str]:
 
 
 def _applies(globs: list[str] | None, scope: str, changed: list[str]) -> bool:
-    """La règle (portée = répertoire `scope`) concerne-t-elle un fichier modifié ?"""
+    """Does the rule (scope = directory `scope`) concern a changed file?"""
     from pathlib import PurePosixPath
     prefix = f"{scope}/" if scope else ""
     sous = [c[len(prefix):] for c in changed if c.startswith(prefix)]
@@ -260,13 +260,13 @@ def _applies(globs: list[str] | None, scope: str, changed: list[str]) -> bool:
 def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging.Logger,
                        sources: list[dict] | None = None, skip: tuple[str, ...] = (),
                        reader: RepoReader | None = None) -> str:
-    """Instructions du dépôt lues SANS configuration : `CLAUDE.md`, `AGENTS.md` et
-    `.claude/rules/*.md` (en honorant leur `paths:`), à la racine et dans les répertoires
-    parents des fichiers modifiés. C'est ce que font tous les reviewers du marché : un
-    projet branché avec un `.reviewme/` vide doit déjà lire ses règles.
+    """Repository instructions read WITHOUT configuration: `CLAUDE.md`, `AGENTS.md` and
+    `.claude/rules/*.md` (honoring their `paths:`), at the root and in the parent
+    directories of changed files. This is what every reviewer on the market does: a
+    project plugged in with an empty `.reviewme/` must already read its rules.
 
-    `skip` : chemins déjà déclarés dans `context.read`, pour ne pas les injecter deux fois.
-    `reader` : d'où lire — la branche de base côté `run.py`, jamais la PR.
+    `skip`: paths already declared in `context.read`, so they are not injected twice.
+    `reader`: where to read from — the base branch on the `run.py` side, never the PR.
     """
     import hashlib
 
@@ -278,7 +278,7 @@ def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging
         parts = c.split("/")[:-1]
         scopes.update("/".join(parts[:i]) for i in range(1, len(parts) + 1))
 
-    candidates: list[tuple[str, str]] = []          # (chemin relatif, portée)
+    candidates: list[tuple[str, str]] = []          # (relative path, scope)
     for scope in sorted(scopes, key=lambda s: (s.count("/"), s)):
         prefix = f"{scope}/" if scope else ""
         for name in INSTRUCTION_FILES:
@@ -288,7 +288,7 @@ def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging
             candidates.append((md, scope))
 
     skip_set = {s.strip("/") for s in skip}
-    vus: set[str] = set()                           # même contenu (lien AGENTS -> CLAUDE)
+    vus: set[str] = set()                           # same content (AGENTS -> CLAUDE link)
     parts: list[str] = []
     budget = AUTO_MAX_BYTES
     for rel, scope in candidates:
@@ -304,8 +304,8 @@ def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging
         if RULES_DIR in rel:
             globs, body = _front_matter_paths(text)
             if globs is _UNREADABLE:
-                logger.warning("lecture auto : `paths:` illisible dans %s — règle appliquée "
-                               "partout", rel)
+                logger.warning("auto read: unreadable `paths:` in %s — rule applied "
+                               "everywhere", rel)
                 globs = None
         else:
             globs, body = None, text
@@ -316,7 +316,7 @@ def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging
         if tronque:
             body = body[:MAX_FILE_BYTES] + "\n\n_(truncated — open the file for the rest)_"
         if len(body) > budget:
-            logger.info("lecture auto : budget atteint, %s non injecté", rel)
+            logger.info("auto read: budget reached, %s not injected", rel)
             continue
         budget -= len(body)
         portee = f" (applies to `{scope}/`)" if scope else ""

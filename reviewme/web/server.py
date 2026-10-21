@@ -1,12 +1,12 @@
-"""Dashboard ReviewMe — read-only, 127.0.0.1 uniquement.
+"""ReviewMe dashboard — read-only, 127.0.0.1 only.
 
-Invariants de sécurité :
-- SUPPRIMÉ : header `Access-Control-Allow-Origin: *` (permettait à n'importe quel onglet
-  navigateur de lire les données internes en cross-origin).
-- SUPPRIMÉ : l'endpoint d'ÉCRITURE non authentifié `POST /api/requeue/<pr>` (CSRF +
-  burn de budget). Le dashboard est désormais strictement lecture seule.
-- Bind 127.0.0.1 uniquement. Pour exposer au-delà : reverse-proxy + authentification
-  (non fournis ici — cf. doc §Sécurité).
+Security invariants:
+- REMOVED: the `Access-Control-Allow-Origin: *` header (it let any browser tab read the
+  internal data cross-origin).
+- REMOVED: the unauthenticated WRITE endpoint `POST /api/requeue/<pr>` (CSRF + budget
+  burn). The dashboard is now strictly read-only.
+- Bind to 127.0.0.1 only. To expose it further: reverse proxy + authentication (not
+  provided here — see doc §Security).
 """
 from __future__ import annotations
 
@@ -26,13 +26,13 @@ REVIEWS_DIR = DATA_DIR / "reviews"
 STATE_FILE = DATA_DIR / "state.json"
 LOG_FILE = DATA_DIR / "reviews.log"
 
-# --- Configuration des sprints (ancre : sprint 89 = lundi 2026-05-25, cycles de 14j) ---
+# --- Sprint configuration (anchor: sprint 89 = Monday 2026-05-25, 14-day cycles) ---
 SPRINT_ANCHOR_DATE = date(2026, 5, 25)
 SPRINT_ANCHOR_NUM = 89
 SPRINT_LENGTH_DAYS = 14
 
-_FR_MONTHS = ["janv", "févr", "mars", "avr", "mai", "juin",
-              "juil", "août", "sept", "oct", "nov", "déc"]
+_FR_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _REVIEW_FILE_RE = re.compile(r"_(\d{8})_(\d{6})\.json$")
 
 
@@ -78,8 +78,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/reviews":
             self._json(self._get_reviews())
         elif parsed.path == "/api/stats":
-            # Compteurs agrégés : seule source disponible quand les reviews détaillées
-            # ne sont pas là (runner de CI, historique transporté par un cache).
+            # Aggregated counters: the only source available when detailed reviews are
+            # absent (CI runner, history carried over by a cache).
             from ..stats import resume
             self._json(resume())
         elif parsed.path == "/api/logs":
@@ -90,7 +90,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
-    # Lecture seule : aucun do_POST (l'endpoint d'écriture requeue a été retiré).
+    # Read-only: no do_POST (the requeue write endpoint was removed).
 
     def _json(self, data) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -143,7 +143,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         sprint_nums = sorted({_sprint_num_for_date(dt.date()) for dt, _ in dated if dt is not None}, reverse=True)
         current_sprint = _sprint_num_for_date(datetime.now(UTC).date())
 
-        sprints_meta = [{"id": "all", "label": "Depuis le début", "num": None, "is_current": False}]
+        sprints_meta = [{"id": "all", "label": "All time", "num": None, "is_current": False}]
         for n in sprint_nums:
             start, end = _sprint_bounds(n)
             sprints_meta.append({"id": str(n), "num": n, "label": _sprint_label(n),
@@ -212,9 +212,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return {"total": total_stats, "categories": [], "dev_leaderboard": []}
 
         def dev_name(login: str) -> str:
-            """Login d'affichage. `LOGIN_SUFFIX_STRIP` retire un suffixe d'organisation
-            (ex. `-acme` sur `alice-acme`) quand la convention interne en ajoute un.
-            Vide par défaut : le login est affiché tel quel."""
+            """Display login. `LOGIN_SUFFIX_STRIP` strips an organization suffix
+            (e.g. `-acme` on `alice-acme`) when the internal convention adds one.
+            Empty by default: the login is shown as-is."""
             suffix = os.environ.get("LOGIN_SUFFIX_STRIP", "")
             if suffix and login.lower().endswith(suffix.lower()):
                 return login[: -len(suffix)]
@@ -222,7 +222,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         categories = []
         top_dev = max(author_costs, key=author_costs.get)
-        categories.append({"id": "golden-dev", "title": "Le Dev en Or", "subtitle": "Le dev qui coute le plus cher",
+        categories.append({"id": "golden-dev", "title": "The Golden Dev", "subtitle": "The most expensive dev",
                            "icon": "gold", "value": f"${author_costs[top_dev]:.2f}", "detail": f"@{dev_name(top_dev)}",
                            "label": f"{len(author_prs[top_dev])} PRs | {author_reviews[top_dev]} reviews",
                            "extra": f"~${author_costs[top_dev] / len(author_prs[top_dev]):.2f}/PR"})
@@ -230,52 +230,52 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         qualified = {a: author_costs[a] / len(author_prs[a]) for a in author_costs if len(author_prs[a]) >= 2}
         if qualified:
             worst = max(qualified, key=qualified.get)
-            categories.append({"id": "money-pit", "title": "Le Gouffre par PR", "subtitle": "Le plus cher en moyenne par PR",
+            categories.append({"id": "money-pit", "title": "The Money Pit", "subtitle": "Most expensive on average per PR",
                                "icon": "fire", "value": f"${qualified[worst]:.2f}/PR", "detail": f"@{dev_name(worst)}",
-                               "label": f"{len(author_prs[worst])} PRs pour ${author_costs[worst]:.2f} au total",
-                               "extra": f"{author_reviews[worst]} reviews cumulees"})
+                               "label": f"{len(author_prs[worst])} PRs for ${author_costs[worst]:.2f} in total",
+                               "extra": f"{author_reviews[worst]} reviews in total"})
 
         avg_rereviews = {a: author_reviews[a] / len(author_prs[a]) for a in author_costs if len(author_prs[a]) >= 2}
         if avg_rereviews:
             rec = max(avg_rereviews, key=avg_rereviews.get)
             mc, mp = author_max_rereviews[rec]
-            categories.append({"id": "recidivist", "title": "Le Recidiviste", "subtitle": "Le plus de re-reviews par PR en moyenne",
+            categories.append({"id": "recidivist", "title": "The Repeat Offender", "subtitle": "Most re-reviews per PR on average",
                                "icon": "loop", "value": f"{avg_rereviews[rec]:.1f}x/PR", "detail": f"@{dev_name(rec)}",
-                               "label": f"{author_reviews[rec]} reviews pour {len(author_prs[rec])} PRs",
-                               "extra": f"Record: PR #{mp} reviewee {mc}x"})
+                               "label": f"{author_reviews[rec]} reviews for {len(author_prs[rec])} PRs",
+                               "extra": f"Record: PR #{mp} reviewed {mc}x"})
 
         avg_diff = {a: sum(author_diffs[a]) / len(author_diffs[a]) for a in author_diffs if len(author_diffs[a]) >= 2}
         if avg_diff:
             mam = max(avg_diff, key=avg_diff.get)
-            categories.append({"id": "mammoth", "title": "Le Mammouth", "subtitle": "Les plus gros diffs en moyenne",
+            categories.append({"id": "mammoth", "title": "The Mammoth", "subtitle": "Biggest diffs on average",
                                "icon": "heavy", "value": f"{avg_diff[mam]:.0f} KB/review", "detail": f"@{dev_name(mam)}",
-                               "label": f"Record: {max(author_diffs[mam]):.0f} KB sur une review",
-                               "extra": f"{len(author_prs[mam])} PRs | ${author_costs[mam]:.2f} au total"})
+                               "label": f"Record: {max(author_diffs[mam]):.0f} KB in one review",
+                               "extra": f"{len(author_prs[mam])} PRs | ${author_costs[mam]:.2f} in total"})
 
         chrono = max(author_duration, key=author_duration.get)
-        categories.append({"id": "time-sink", "title": "Le Chronophage", "subtitle": "Le dev qui a fait tourner l'IA le plus longtemps",
+        categories.append({"id": "time-sink", "title": "The Time Sink", "subtitle": "The dev who kept the AI running the longest",
                            "icon": "clock", "value": f"{author_duration[chrono] / 3_600_000:.1f}h", "detail": f"@{dev_name(chrono)}",
                            "label": f"{author_reviews[chrono]} reviews | {len(author_prs[chrono])} PRs",
-                           "extra": f"~{author_duration[chrono] / author_reviews[chrono] / 60_000:.0f} min/review en moyenne"})
+                           "extra": f"~{author_duration[chrono] / author_reviews[chrono] / 60_000:.0f} min/review on average"})
 
         token_king = max(author_tokens, key=author_tokens.get)
         tok = author_tokens[token_king]
         tok_str = f"{tok / 1_000_000:.1f}M" if tok > 1_000_000 else f"{tok / 1000:.0f}k"
-        categories.append({"id": "token-monster", "title": "Le Devoreur de Tokens", "subtitle": "Le dev qui a consomme le plus de tokens",
+        categories.append({"id": "token-monster", "title": "The Token Eater", "subtitle": "The dev who consumed the most tokens",
                            "icon": "chip", "value": tok_str, "detail": f"@{dev_name(token_king)}",
                            "label": f"{author_reviews[token_king]} reviews | ${author_costs[token_king]:.2f}",
                            "extra": f"~{tok / author_reviews[token_king] / 1000:.0f}k tokens/review"})
 
         abonne = max(author_prs, key=lambda a: len(author_prs[a]))
-        categories.append({"id": "regular", "title": "L'Abonne", "subtitle": "Le dev avec le plus de PRs reviewees",
+        categories.append({"id": "regular", "title": "The Regular", "subtitle": "The dev with the most reviewed PRs",
                            "icon": "bolt", "value": f"{len(author_prs[abonne])} PRs", "detail": f"@{dev_name(abonne)}",
-                           "label": f"${author_costs[abonne]:.2f} au total", "extra": f"{author_reviews[abonne]} reviews cumulees"})
+                           "label": f"${author_costs[abonne]:.2f} in total", "extra": f"{author_reviews[abonne]} reviews in total"})
 
         if qualified:
             best = min(qualified, key=qualified.get)
-            categories.append({"id": "bargain", "title": "Le Bon Eleve", "subtitle": "Le moins cher en moyenne par PR",
+            categories.append({"id": "bargain", "title": "The Model Student", "subtitle": "Cheapest on average per PR",
                                "icon": "leaf", "value": f"${qualified[best]:.2f}/PR", "detail": f"@{dev_name(best)}",
-                               "label": f"{len(author_prs[best])} PRs pour ${author_costs[best]:.2f} au total",
+                               "label": f"{len(author_prs[best])} PRs for ${author_costs[best]:.2f} in total",
                                "extra": f"~{author_reviews[best] / len(author_prs[best]):.1f} reviews/PR"})
 
         dev_leaderboard = []
@@ -301,12 +301,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 def main() -> None:
     if any(a in ("-h", "--help") for a in sys.argv[1:]):
         print(__doc__.strip())
-        print("\\nUsage : reviewme-web [port]   (défaut 8420, écoute sur 127.0.0.1)")
+        print("\\nUsage: reviewme-web [port]   (default 8420, listens on 127.0.0.1)")
         return
 
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8420
     server = HTTPServer(("127.0.0.1", port), DashboardHandler)
-    print(f"ReviewMe Dashboard (read-only) : http://127.0.0.1:{port}")
+    print(f"ReviewMe Dashboard (read-only): http://127.0.0.1:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

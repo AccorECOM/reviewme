@@ -1,1 +1,1 @@
-"""Dashboard read-only de ReviewMe (Hall of Fame par sprint, stats de coût)."""
+"""ReviewMe read-only dashboard (Hall of Fame per sprint, cost stats)."""

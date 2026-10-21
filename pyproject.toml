@@ -1,7 +1,7 @@
 [project]
 name = "reviewme"
 version = "1.2.0"
-description = "Bot de code review IA : commentaires inline ligne-par-ligne + cycle de vie des threads, multi-entrées (CLI / poll / webhook / CI)"
+description = "AI code review bot: line-by-line inline comments + thread lifecycle, multiple entry points (CLI / poll / webhook / CI)"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Auth GitHub App (identité dédiée). Non requis avec un PAT : `uv sync --extra github-app`.
+# GitHub App auth (dedicated identity). Not needed with a PAT: `uv sync --extra github-app`.
 github-app = ["pyjwt[crypto]>=2.10"]
 
 [tool.uv]
@@ -36,11 +36,11 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "UP", "B", "SIM", "RUF"]
 ignore = [
-  "E501",     # longueur de ligne : les commentaires explicatifs priment
-  "RUF001",   # caractères « ambigus » : la doc et les prompts sont en français
+  "E501",     # line length: explanatory comments come first
+  "RUF001",   # "ambiguous" characters: docs and prompts contain typographic quotes and accents
   "RUF002",
   "RUF003",
-  "SIM115",   # les deux `open()` concernés sont fermés dans un `finally`
-  "UP042",    # `Severity(str, Enum)` -> `StrEnum` changerait `str(Severity.X)` de
-              # "Severity.X" à "X" : pas de gain, et une sémantique modifiée pour un linter
+  "SIM115",   # both `open()` calls concerned are closed in a `finally`
+  "UP042",    # `Severity(str, Enum)` -> `StrEnum` would change `str(Severity.X)` from
+              # "Severity.X" to "X": no gain, and a semantic change for a linter
 ]

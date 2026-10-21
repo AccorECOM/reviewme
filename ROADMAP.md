@@ -1,69 +1,69 @@
-# Reste à faire
+# Still to do
 
-Ce qui manque, dans l'ordre de ce que ça apporterait. Rien ici n'est bloquant : le moteur
-tourne en production, ces points sont des limites connues et assumées.
+What is missing, in order of what it would bring. Nothing here is blocking: the engine
+runs in production, these points are known and accepted limitations.
 
-## Ce qui demande une décision avant du code
+## What needs a decision before any code
 
-**Un plafond sur la taille du diff analysé.** Aujourd'hui rien ne borne une PR de refonte :
-`MAX_BUDGET_USD` coupe par reviewer, mais après coup. La question n'est pas technique — que
-faire d'une PR trop grosse ? La sauter, tronquer le diff, ou poster « trop volumineuse pour
-une relecture utile » ? Chaque réponse a ses partisans.
+**A cap on the size of the analyzed diff.** Today nothing bounds a rewrite PR:
+`MAX_BUDGET_USD` cuts per reviewer, but after the fact. The question is not technical — what
+should happen to a PR that is too big? Skip it, truncate the diff, or post "too large for
+a useful review"? Each answer has its supporters.
 
-**`REQUEST_CHANGES` sur les `BLOCKER`.** Le bot ne pose que des `COMMENT`. Bloquer un merge
-sur un finding automatique suppose une identité dédiée (GitHub App) et un taux de faux
-positifs mesuré — sinon c'est de la friction pure. Voir aussi : le bot ne peut pas approuver
-sa propre PR, et une approbation qui compterait dans les règles de branche protégée ferait
-de lui un tampon automatique.
+**`REQUEST_CHANGES` on `BLOCKER`s.** The bot only posts `COMMENT`s. Blocking a merge
+on an automated finding requires a dedicated identity (GitHub App) and a measured false
+positive rate — otherwise it is pure friction. See also: the bot cannot approve
+its own PR, and an approval that counted toward protected branch rules would turn
+it into an automatic rubber stamp.
 
-## Ce qui n'a pas encore de données
+## What has no data yet
 
-**Le seuil de confiance.** La valeur par défaut écarte une bonne part des remarques. Le
-rapport affiche la part de celles qui reçoivent une réponse d'un développeur : c'est ce
-chiffre qui doit décider du réglage, pas une intuition.
+**The confidence threshold.** The default value drops a good share of the remarks. The
+report shows the share of those that get a reply from a developer: that is the
+number that should drive the setting, not a hunch.
 
-**Le cycle retour → règle.** `reviewme feedback` propose des règles attribuées à partir des
-réponses des développeurs. Tant que `common/regles-terrain.md` est vide, ce n'est qu'une
+**The feedback → rule loop.** `reviewme feedback` proposes attributed rules based on
+developers' replies. As long as `common/team-rules.md` is empty, it is only an
 intention.
 
-## Limites techniques connues
+## Known technical limitations
 
-**L'historique des statistiques est borné et transitoire.** `stats.json` vit dans un cache de
-CI, plafonne à `MAX_ENTREES = 5000` runs (~1,5 Mo) et tronque les plus anciens sans
-avertissement. Le rapport ne montre par ailleurs que les 30 dernières PR et les 40 derniers
-runs — le board ne peut donc pas exploser, mais la mémoire longue n'existe pas.
+**The statistics history is bounded and transient.** `stats.json` lives in a CI cache,
+caps at `MAX_ENTREES = 5000` runs (~1.5 MB) and truncates the oldest ones without
+warning. The report also only shows the last 30 PRs and the last 40
+runs — so the board cannot blow up, but there is no long-term memory.
 
-À quelques centaines de PR, le sujet n'est pas la taille : c'est qu'on ne peut pas répondre à
-« est-ce que le bot s'améliore ? ». Il n'y a aucune vue temporelle, et les données qui
-permettraient de la construire disparaissent au fil de l'eau. La piste retenue pour une v2 est
-un stockage externe — S3 ou équivalent — qui garde l'historique complet hors du cache, avec un
-rapport agrégé par semaine plutôt que par PR. Vider le cache de CI ne coûterait alors plus que
-les compteurs courants.
+At a few hundred PRs, the issue is not size: it is that nobody can answer
+"is the bot getting better?". There is no time-based view, and the data that
+would make it possible to build one disappears as it goes. The option chosen for a v2 is
+external storage — S3 or equivalent — that keeps the full history outside the cache, with a
+report aggregated per week rather than per PR. Clearing the CI cache would then only cost
+the current counters.
 
 
-**Pas d'arrêt net au plafond de coût d'une PR.** Les reviewers tournent en parallèle : au
-moment où le dépassement est constaté, ils ont déjà tourné. Un arrêt réel supposerait une
-exécution séquentielle par priorité.
+**No hard stop at a PR's cost cap.** Reviewers run in parallel: by the time
+the overrun is detected, they have already run. A real stop would require
+sequential execution by priority.
 
-**Le diff est envoyé en entier à chaque commit**, pas l'incrémental depuis la dernière
-review. C'est un choix : un diff partiel ferait juger des lignes sorties de leur contexte.
+**The diff is sent in full on every commit**, not incrementally since the last
+review. This is deliberate: a partial diff would have lines judged out of their context.
 
-**Pas de resolve/unresolve des threads.** Le bot répond « ce point n'apparaît plus » quand
-un finding disparaît, mais ne ferme pas le fil — cela demanderait l'API GraphQL et le scope
-`Contents: R/W`, donc d'élargir les droits du token.
+**No resolve/unresolve of threads.** The bot replies "this point no longer appears" when
+a finding disappears, but does not close the thread — that would require the GraphQL API and the
+`Contents: R/W` scope, hence broadening the token's permissions.
 
-**Pas de sous-agents, volontairement.** Vérifié : un sous-agent n'hérite pas de l'allowlist
-de son parent. Autoriser `Task` rouvrirait l'exécution de code arbitraire, puisque la
-configuration d'un reviewer peut venir du dépôt reviewé. Pour faire varier le modèle selon
-la tâche, créer un reviewer de plus avec son `model`.
+**No subagents, on purpose.** Verified: a subagent does not inherit its parent's
+allowlist. Allowing `Task` would reopen arbitrary code execution, since a
+reviewer's configuration can come from the reviewed repository. To vary the model by
+task, create one more reviewer with its own `model`.
 
-**Le sandbox de déploiement reste à câbler à l'infra** (pas de réseau sortant hors GitHub,
-système de fichiers confiné au clone). C'est la mitigation de fond contre la prompt
-injection, et elle ne peut pas vivre dans ce dépôt.
+**The deployment sandbox still has to be wired into the infrastructure** (no outbound network
+except GitHub, file system confined to the clone). It is the fundamental mitigation against prompt
+injection, and it cannot live in this repository.
 
-## Coût
+## Cost
 
-Le contexte stable — personas, consignes, conventions lues dans le dépôt — est refacturé à
-chaque review. Le **prompt caching** est le seul levier qui l'attaque vraiment, et il est
-neutralisé dès qu'une passerelle rejette les en-têtes de caching. À vérifier auprès de qui
-opère la passerelle avant d'optimiser ailleurs.
+The stable context — personas, instructions, conventions read from the repository — is billed
+again on every review. **Prompt caching** is the only lever that really tackles it, and it is
+neutralized as soon as a gateway rejects the caching headers. Check with whoever
+operates the gateway before optimizing elsewhere.

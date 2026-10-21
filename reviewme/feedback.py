@@ -1,13 +1,13 @@
-"""Extraction des retours de développeurs, pour en faire des règles attribuées.
+"""Extraction of developer replies, to turn them into attributed rules.
 
-Le bot ne mémorise rien d'une PR à l'autre : un point rejeté hier revient demain. Ce
-module ne l'apprend pas tout seul — il **prépare** le travail et laisse la décision à un
-humain.
+The bot remembers nothing from one PR to the next: a point rejected yesterday comes back
+tomorrow. This module does not learn it on its own — it **prepares** the work and leaves
+the decision to a human.
 
-Le point clé est l'attribution. Une règle absorbée en silence rend le bot progressivement
-aveugle sans que personne ne sache pourquoi. Une règle qui porte son auteur, sa PR et sa
-date reste discutable : un autre développeur peut la contester, et le désaccord devient
-visible au lieu de disparaître dans un prompt.
+The key point is attribution. A rule absorbed silently makes the bot progressively blind
+without anyone knowing why. A rule that carries its author, its PR and its date stays
+open to debate: another developer can challenge it, and the disagreement becomes visible
+instead of vanishing into a prompt.
 """
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ def _nettoyer(texte: str) -> str:
 
 
 def collecter(gh, pr_number: int, logger: logging.Logger) -> list[dict]:
-    """Les remarques du bot auxquelles un humain a répondu, sur cette PR."""
+    """The bot's findings that a human replied to, on this PR."""
     try:
         commentaires = gh.list_review_comments(pr_number)
     except Exception as e:
-        logger.warning("PR #%s : commentaires illisibles (%s)", pr_number, type(e).__name__)
+        logger.warning("PR #%s: comments unreadable (%s)", pr_number, type(e).__name__)
         return []
 
     racines = {c["id"]: c for c in commentaires
@@ -50,20 +50,20 @@ def collecter(gh, pr_number: int, logger: logging.Logger) -> list[dict]:
 
 
 def en_regles(echanges: list[dict], pr_number: int) -> str:
-    """Bloc markdown prêt à coller dans `common/regles-terrain.md`.
+    """Markdown block ready to paste into `common/team-rules.md`.
 
-    Chaque règle porte sa source. Rien n'est décidé ici : c'est une proposition qu'un
-    humain garde, reformule ou jette.
+    Each rule carries its source. Nothing is decided here: it is a proposal that a
+    human keeps, rewords or discards.
     """
     if not echanges:
         return ""
     date = datetime.now(UTC).strftime("%Y-%m-%d")
-    lignes = [f"<!-- Proposé depuis la PR #{pr_number}, le {date}. "
-              f"À relire avant de garder : une réponse ponctuelle n'est pas une règle. -->"]
+    lignes = [f"<!-- Proposed from PR #{pr_number}, on {date}. "
+              f"Review before keeping: a one-off reply is not a rule. -->"]
     for e in echanges:
         lignes.append("")
-        lignes.append(f"- **{e['fichier']}** — le reviewer `{e['reviewer']}` disait : "
-                      f"« {e['remarque'][:180]} »")
-        lignes.append(f"  **{e['auteur']}** a répondu (PR #{pr_number}, {date}) : "
-                      f"« {e['reponse'][:180]} »")
+        lignes.append(f"- **{e['fichier']}** — reviewer `{e['reviewer']}` said: "
+                      f"\"{e['remarque'][:180]}\"")
+        lignes.append(f"  **{e['auteur']}** replied (PR #{pr_number}, {date}): "
+                      f"\"{e['reponse'][:180]}\"")
     return "\n".join(lignes)

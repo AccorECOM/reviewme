@@ -1,15 +1,15 @@
-"""Statistiques agrégées, sans contenu de review.
+"""Aggregated statistics, without review content.
 
-`data/reviews/` garde le détail d'une review — dont le titre de la PR et le résumé
-rédigé par le modèle. C'est utile en local, mais ce n'est pas transportable : sur un
-runner éphémère il faut le faire transiter par un cache partagé entre les builds de
-l'app, et y mettre du contenu de PR n'a pas de raison d'être.
+`data/reviews/` keeps the details of a review — including the PR title and the summary
+written by the model. That is useful locally, but not portable: on an ephemeral runner
+it has to go through a cache shared between the app's builds, and there is no reason to
+put PR content there.
 
-Ce fichier-ci ne contient que des **compteurs** : combien de reviews, pour quel coût,
-combien de remarques postées, dédupliquées, écartées. De quoi alimenter un tableau de
-bord et mesurer ce que le bot apporte, sans embarquer une ligne de code ni un titre.
+This file only contains **counters**: how many reviews, at what cost, how many findings
+posted, deduplicated, dropped. Enough to feed a dashboard and measure what the bot
+brings, without carrying a single line of code or a title.
 
-Append-only et idempotent par (PR, commit) : rejouer un build ne fausse pas les totaux.
+Append-only and idempotent per (PR, commit): replaying a build does not skew the totals.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from pathlib import Path
 from .config import DATA_DIR
 
 STATS_FILE = DATA_DIR / "stats.json"
-MAX_ENTREES = 5000          # ~1,5 Mo : au-delà, on tronque les plus anciennes
+MAX_ENTREES = 5000          # ~1.5 MB: beyond that, the oldest entries are truncated
 
 
 def _charger(chemin: Path) -> dict:
@@ -38,7 +38,7 @@ def enregistrer(pr_number: int, head_sha: str, auteur: str, projet: str,
                 reviewers: list[str], counts: dict, cout: float, duree_ms: int,
                 diff_kb: float, logger: logging.Logger | None = None,
                 chemin: Path | None = None) -> None:
-    """Ajoute un run. Aucun titre, aucun message, aucun extrait de code."""
+    """Add a run. No title, no message, no code excerpt."""
     chemin = chemin or STATS_FILE
     data = _charger(chemin)
 
@@ -48,7 +48,7 @@ def enregistrer(pr_number: int, head_sha: str, auteur: str, projet: str,
         "cle": cle,
         "date": datetime.now(UTC).isoformat(timespec="seconds"),
         "pr": pr_number,
-        "auteur": auteur,              # login GitHub : c'est un identifiant public
+        "auteur": auteur,              # GitHub login: it is a public identifier
         "projet": projet,
         "reviewers": reviewers,
         "diff_kb": round(diff_kb, 1),
@@ -63,7 +63,7 @@ def enregistrer(pr_number: int, head_sha: str, auteur: str, projet: str,
         "hors_diff": counts.get("out_of_diff", 0),
         "plafonnes": counts.get("capped", 0),
         "reponses": counts.get("replied", 0),
-        # Engagement : combien des remarques encore ouvertes ont reçu une réponse humaine.
+        # Engagement: how many of the still-open findings received a human reply.
         "remarques_ouvertes": counts.get("remarques_ouvertes", 0),
         "remarques_avec_reponse": counts.get("remarques_avec_reponse", 0),
     })
@@ -75,11 +75,11 @@ def enregistrer(pr_number: int, head_sha: str, auteur: str, projet: str,
         chemin.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     except OSError as e:
         if logger:
-            logger.info("Statistiques non écrites (%s) — sans effet sur la review", e)
+            logger.info("Statistics not written (%s) — no effect on the review", e)
 
 
 def resume(chemin: Path | None = None) -> dict:
-    """Agrégats prêts pour un tableau de bord."""
+    """Aggregates ready for a dashboard."""
     runs = _charger(chemin or STATS_FILE)["runs"]
     if not runs:
         return {"runs": 0}
@@ -100,7 +100,7 @@ def resume(chemin: Path | None = None) -> dict:
         "runs": len(runs),
         "prs": len(prs),
         "remarques_postees": postes,
-        "remarques_dedupliquees": dedup,          # ce qu'on a évité de reposter
+        "remarques_dedupliquees": dedup,          # what we avoided reposting
         "remarques_sous_seuil": sum(r.get("sous_seuil", 0) for r in runs),
         "reponses_dans_threads": sum(r.get("reponses", 0) for r in runs),
         "remarques_avec_reponse": max((r.get("remarques_avec_reponse", 0) for r in runs), default=0),

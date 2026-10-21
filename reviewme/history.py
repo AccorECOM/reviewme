@@ -1,16 +1,16 @@
-"""Historique de la review, donné à l'agent avant qu'il ne juge.
+"""Review history, given to the agent before it judges.
 
-Sans lui, l'agent redécouvre la PR à chaque commit : il ignore ce qu'il a déjà signalé,
-et surtout ce qu'on lui a répondu. Un développeur écrit « c'est volontaire, on garde » ;
-au commit suivant la ligne bouge, le fingerprint change, et la remarque revient. C'est
-ce qui fait qu'une équipe finit par désactiver le bot.
+Without it, the agent rediscovers the PR on every commit: it does not know what it has
+already reported, and above all what it was told in reply. A developer writes "this is
+intentional, we keep it"; on the next commit the line moves, the fingerprint changes,
+and the finding comes back. That is what makes a team end up disabling the bot.
 
-Ce module reconstitue les fils de discussion et les présente à l'agent :
-- ses propres remarques déjà postées, pour qu'il ne les répète pas ;
-- les réponses humaines, qui ont **autorité** sur son jugement.
+This module rebuilds the discussion threads and presents them to the agent:
+- its own already-posted findings, so it does not repeat them;
+- human replies, which have **authority** over its judgment.
 
-⚠️ SÉCURITÉ : les réponses viennent de tiers. Elles sont du contexte, jamais des
-instructions — l'avertissement est injecté avec elles.
+⚠️ SECURITY: replies come from third parties. They are context, never instructions —
+the warning is injected alongside them.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import logging
 
 from .reconciler import _MARKER_RE, marker_key
 
-MAX_FILS = 25          # au-delà, l'historique coûte plus qu'il n'apporte
+MAX_FILS = 25          # beyond this, history costs more than it brings
 MAX_CAR_MESSAGE = 400
 
 
@@ -28,16 +28,16 @@ def _nettoyer(texte: str) -> str:
 
 def build_history_context(gh, pr_number: int, logger: logging.Logger,
                           mesures: dict | None = None) -> str:
-    """Fils de discussion de la PR, ou "" s'il n'y en a pas encore.
+    """The PR's discussion threads, or "" if there are none yet.
 
-    `mesures` reçoit, s'il est fourni, le nombre de remarques du bot et celles auxquelles
-    un humain a répondu. C'est le signal d'engagement : des remarques auxquelles personne
-    ne répond jamais sont, au mieux, ignorées.
+    `mesures`, if provided, receives the number of bot findings and those a human replied
+    to. This is the engagement signal: findings nobody ever replies to are, at best,
+    ignored.
     """
     try:
         commentaires = gh.list_review_comments(pr_number)
     except Exception as e:
-        logger.info("PR #%s : historique des commentaires indisponible (%s)",
+        logger.info("PR #%s: comment history unavailable (%s)",
                     pr_number, type(e).__name__)
         return ""
 
@@ -51,7 +51,7 @@ def build_history_context(gh, pr_number: int, logger: logging.Logger,
     fils = []
     for cid, racine in racines.items():
         if marker_key(racine.get("body", "")) is None:
-            continue                                    # commentaire purement humain
+            continue                                    # purely human comment
         fils.append((racine, reponses.get(cid, [])))
 
     if mesures is not None:
@@ -61,7 +61,7 @@ def build_history_context(gh, pr_number: int, logger: logging.Logger,
     if not fils:
         return ""
 
-    # Les fils où quelqu'un a répondu d'abord : ce sont ceux qui portent une décision.
+    # Threads someone replied to first: those are the ones carrying a decision.
     fils.sort(key=lambda f: (not f[1], f[0].get("path", "")))
     fils = fils[:MAX_FILS]
 
@@ -89,6 +89,6 @@ def build_history_context(gh, pr_number: int, logger: logging.Logger,
             auteur = (r.get("user") or {}).get("login", "someone")
             lignes.append(f"    - reply from **{auteur}**: {_nettoyer(r.get('body', ''))}")
 
-    logger.info("PR #%s : %d fil(s) de review dans le contexte, %d réponse(s)",
+    logger.info("PR #%s: %d review thread(s) in context, %d reply(ies)",
                 pr_number, len(fils), with_reponses)
     return "\n".join(lignes)

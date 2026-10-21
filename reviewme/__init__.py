@@ -1,28 +1,28 @@
-"""ReviewMe — bot de code review IA : commentaires inline ligne-par-ligne + cycle de vie des threads.
+"""ReviewMe — AI code review bot: line-by-line inline comments + thread lifecycle.
 
-Modules :
+Modules:
   config.py        configuration (.env)
-  models.py        Finding / ReviewResult + parsing robuste
-  diff_utils.py    parseur de patch -> positions inline valides (anti-422)
-  reviewer.py      invocation `claude -p` -> findings structurés (sans Write)
-  github_client.py client REST GitHub (diff, files, review inline, replies, list)
-  reconciler.py    dédup par fingerprint + validation diff + prepare()/post_all()
-  projects.py      config par PROJET + specs de reviewers + sélection (ADR v3)
-  precheck.py      script déterministe d'un reviewer (les faits avant le LLM)
-  history.py       fils de discussion de la PR, donnés à l'agent avant qu'il juge
-  stats.py         compteurs agrégés, sans contenu (transportables par un cache CI)
-  feedback.py      retours des développeurs -> règles attribuées, à relire
-  report.py        rapport HTML autonome des statistiques
-  fake.py          mode simulé : toute la chaîne, sans appeler le LLM
-  context/         fournisseurs de contexte externe optionnels (jira.py)
-  github_auth.py   PAT ou GitHub App (JWT RS256 -> token d'installation renouvelé)
-  run.py           run_review(repo, pr, config) : la fonction commune à toutes les entrées
-  state.py         cache last_reviewed_sha (flock inter-process)
-  logging_.py      logs JSON + console
-  cli.py           entrée one-shot : `reviewme review --repo O/R --pr N`
-  poll.py          entrée boucle (mode VPS)
-  webhook.py       entrée webhook (stub documenté — v2)
-  web/             dashboard (read-only, durci)
+  models.py        Finding / ReviewResult + robust parsing
+  diff_utils.py    patch parser -> valid inline positions (anti-422)
+  reviewer.py      `claude -p` invocation -> structured findings (no Write)
+  github_client.py GitHub REST client (diff, files, inline review, replies, list)
+  reconciler.py    fingerprint dedup + diff validation + prepare()/post_all()
+  projects.py      per-PROJECT config + reviewer specs + selection (ADR v3)
+  precheck.py      a reviewer's deterministic script (facts before the LLM)
+  history.py       PR discussion threads, given to the agent before it judges
+  stats.py         aggregated counters, no content (portable via a CI cache)
+  feedback.py      developer replies -> attributed rules, to be reviewed
+  report.py        standalone HTML stats report
+  fake.py          simulated mode: the whole pipeline, without calling the LLM
+  context/         optional external context providers (jira.py)
+  github_auth.py   PAT or GitHub App (JWT RS256 -> renewed installation token)
+  run.py           run_review(repo, pr, config): the function shared by all entry points
+  state.py         last_reviewed_sha cache (inter-process flock)
+  logging_.py      JSON + console logs
+  cli.py           one-shot entry point: `reviewme review --repo O/R --pr N`
+  poll.py          loop entry point (VPS mode)
+  webhook.py       webhook entry point (documented stub — v2)
+  web/             dashboard (read-only, hardened)
 """
 
 __version__ = "1.2.0"

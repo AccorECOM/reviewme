@@ -1,15 +1,15 @@
-"""Rapport HTML autonome à partir des statistiques agrégées.
+"""Standalone HTML report built from the aggregated statistics.
 
-Une page sans dépendance ni requête réseau : on l'ouvre, on la met en pièce jointe, on
-la publie. Elle ne contient que des compteurs — aucun titre de PR, aucun extrait de code
-(cf. `stats.py`), donc elle circule sans précaution particulière.
+A page with no dependency and no network request: open it, attach it, publish it. It
+only contains counters — no PR title, no code excerpt (see `stats.py`), so it can be
+shared without special precautions.
 
-Choix de formes : les totaux sont des **chiffres**, pas des graphiques — un histogramme
-à une barre n'apprend rien. Seules les séries (activité par PR, activité par auteur) sont
-tracées, à une série chacune : pas de couleur catégorielle, donc pas de légende.
+Form choices: totals are **numbers**, not charts — a one-bar histogram teaches nothing.
+Only series (activity per PR, activity per author) are plotted, one series each: no
+categorical color, hence no legend.
 
-Palette validée sur fond crème (6 checks : bande de clarté, chroma, séparation
-daltonisme, plancher vision normale, contraste). Ne pas la modifier sans revalider.
+Palette validated on a cream background (6 checks: lightness band, chroma, color-blind
+separation, normal-vision floor, contrast). Do not change it without revalidating.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .stats import _charger, resume
 
-ACCENT = "#7C3AED"          # violet — série principale
+ACCENT = "#7C3AED"          # violet — main series
 ENCRE = "#111111"
 MUET = "#55504C"
 FOND = "#FAF4F0"
@@ -51,10 +51,10 @@ td{padding:7px 10px;border-bottom:1px solid #DDD3CC;font-variant-numeric:tabular
 
 
 def _taux(r: dict) -> str:
-    """Part des remarques encore ouvertes auxquelles un développeur a répondu.
+    """Share of still-open findings that a developer replied to.
 
-    C'est le signal d'engagement : des remarques auxquelles personne ne répond jamais
-    sont, au mieux, ignorées — au pire, du bruit qu'on finit par couper.
+    This is the engagement signal: findings nobody ever replies to are, at best,
+    ignored — at worst, noise that ends up being switched off.
     """
     ouvertes = r.get("remarques_ouvertes", 0)
     if not ouvertes:
@@ -67,19 +67,19 @@ def _tuile(valeur: str, label: str) -> str:
 
 
 def _barres(donnees: list[tuple[str, float]], unite: str, hauteur: int = 190) -> str:
-    """Barres verticales, une seule série — donc ni légende ni couleur catégorielle."""
+    """Vertical bars, a single series — hence no legend and no categorical color."""
     if not donnees:
-        return f'<p style="color:{MUET}">Pas encore de données.</p>'
+        return f'<p style="color:{MUET}">No data yet.</p>'
 
     largeur, marge_g, marge_b = 900, 44, 34
     plot_h = hauteur - marge_b - 14
     maxi = max(v for _, v in donnees) or 1
     pas = (largeur - marge_g - 12) / len(donnees)
-    barre = max(6, min(38, pas - 6))          # 6 px de gouttière : les fills ne se touchent pas
+    barre = max(6, min(38, pas - 6))          # 6 px gutter: the fills do not touch
 
     out = [f'<svg viewBox="0 0 {largeur} {hauteur}" width="100%" role="img" '
            f'style="max-width:{largeur}px;font-family:inherit">']
-    # grille : trois repères, volontairement discrets
+    # grid: three markers, deliberately subtle
     for i in range(4):
         y = 14 + plot_h * i / 3
         val = maxi * (3 - i) / 3
@@ -101,13 +101,13 @@ def _barres(donnees: list[tuple[str, float]], unite: str, hauteur: int = 190) ->
 
 
 def _barres_h(donnees: list[tuple[str, float, str]]) -> str:
-    """Barres horizontales : le libellé est lisible, la valeur est écrite au bout."""
+    """Horizontal bars: the label is readable, the value is written at the end."""
     if not donnees:
-        return f'<p style="color:{MUET}">Pas encore de données.</p>'
+        return f'<p style="color:{MUET}">No data yet.</p>'
     largeur, ligne = 900, 30
     hauteur = len(donnees) * ligne + 10
     maxi = max(v for _, v, _ in donnees) or 1
-    label_w, place_valeur = 160, 200   # le libellé de valeur tient toujours à droite
+    label_w, place_valeur = 160, 200   # the value label always fits on the right
     out = [f'<svg viewBox="0 0 {largeur} {hauteur}" width="100%" role="img" '
            f'style="max-width:{largeur}px;font-family:inherit">']
     for i, (label, val, suffixe) in enumerate(donnees):
@@ -127,17 +127,17 @@ def generer(chemin_stats: Path | None = None) -> str:
     runs = _charger(chemin_stats or Path("data/stats.json"))["runs"]
 
     if not r.get("runs"):
-        corps = '<div class="card"><p>Aucune review enregistrée pour le moment.</p></div>'
+        corps = '<div class="card"><p>No review recorded yet.</p></div>'
     else:
         evite = r["remarques_dedupliquees"] + r["remarques_sous_seuil"]
         tuiles = "".join([
             _tuile(str(r["prs"]), "pull requests"),
-            _tuile(str(r["remarques_postees"]), "remarques postées"),
-            _tuile(str(evite), "remarques évitées"),
-            _tuile(f'{r["cout_total_usd"]:.2f} $', "coût total"),
-            _tuile(f'{r["cout_moyen_par_pr"]:.2f} $', "coût par PR"),
-            _tuile(str(r["remarques_par_pr"]), "remarques par PR"),
-            _tuile(_taux(r), "remarques ayant reçu une réponse"),
+            _tuile(str(r["remarques_postees"]), "findings posted"),
+            _tuile(str(evite), "findings avoided"),
+            _tuile(f'{r["cout_total_usd"]:.2f} $', "total cost"),
+            _tuile(f'{r["cout_moyen_par_pr"]:.2f} $', "cost per PR"),
+            _tuile(str(r["remarques_par_pr"]), "findings per PR"),
+            _tuile(_taux(r), "findings that got a reply"),
         ])
 
         par_pr: dict[int, float] = {}
@@ -146,7 +146,7 @@ def generer(chemin_stats: Path | None = None) -> str:
         derniers = list(par_pr.items())[-30:]
 
         auteurs = sorted(r["par_auteur"].items(), key=lambda kv: -kv[1]["postes"])[:12]
-        lignes_auteurs = [(a, d["postes"], f'{d["postes"]} remarques · {d["cout"]:.2f} $')
+        lignes_auteurs = [(a, d["postes"], f'{d["postes"]} findings · {d["cout"]:.2f} $')
                           for a, d in auteurs]
 
         lignes_table = "".join(
@@ -159,31 +159,31 @@ def generer(chemin_stats: Path | None = None) -> str:
         corps = f"""
         <div class="tiles">{tuiles}</div>
 
-        <h2>Coût par pull request</h2>
+        <h2>Cost per pull request</h2>
         <div class="card">{_barres([(f'#{p}', c) for p, c in derniers], " $")}</div>
 
-        <h2>Remarques par auteur</h2>
+        <h2>Findings per author</h2>
         <div class="card">{_barres_h(lignes_auteurs)}</div>
 
-        <h2>Détail des runs</h2>
+        <h2>Run details</h2>
         <div class="card"><table>
-          <tr><th>PR</th><th>Auteur</th><th>Reviewers</th><th>Postées</th>
-              <th>Dédupliquées</th><th>Coût</th><th>Durée</th></tr>
+          <tr><th>PR</th><th>Author</th><th>Reviewers</th><th>Posted</th>
+              <th>Deduplicated</th><th>Cost</th><th>Duration</th></tr>
           {lignes_table}
         </table></div>"""
 
     date = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
     return f"""<!doctype html>
-<html lang="fr"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ReviewMe — statistiques</title>
+<title>ReviewMe — statistics</title>
 <style>{_CSS}</style></head>
 <body><div class="wrap">
 <h1>ReviewMe</h1>
-<p class="sub">Statistiques de review · généré le {date}</p>
+<p class="sub">Review statistics · generated on {date}</p>
 {corps}
-<p class="foot">Compteurs uniquement : cette page ne contient aucun titre de pull request,
-aucun message de review ni extrait de code.</p>
+<p class="foot">Counters only: this page contains no pull request title, no review
+message and no code excerpt.</p>
 </div></body></html>"""
 
 

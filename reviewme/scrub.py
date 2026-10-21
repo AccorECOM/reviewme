@@ -1,32 +1,32 @@
-"""Scrub de sortie avant post GitHub (défense exfiltration — ADR sécurité).
+"""Output scrub before posting to GitHub (exfiltration defense — security ADR).
 
-Le moteur lit du contenu de PR NON FIABLE et peut être poussé (prompt injection) à
-recopier un secret ou du contenu interne dans un commentaire posté sur une PR publique.
-On caviarde donc les secrets et chemins absolus de tout texte avant publication.
+The engine reads UNTRUSTED PR content and can be pushed (prompt injection) into
+copying a secret or internal content into a comment posted on a public PR.
+So secrets and absolute paths are redacted from any text before publishing.
 
-Ce n'est PAS une protection complète (la vraie mitigation est le sandbox sans réseau
-sortant + Read scopé, cf. doc §Sécurité) — c'est la dernière barrière avant le post.
+This is NOT complete protection (the real mitigation is the sandbox with no outbound
+network + scoped Read, see doc §Security) — it is the last barrier before posting.
 """
 from __future__ import annotations
 
 import re
 
 _SECRET_PATTERNS = [
-    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),           # tokens GitHub (ghp_, gho_, ghu_, ghs_, ghr_)
-    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),           # PAT fine-grained
-    re.compile(r"glpat-[A-Za-z0-9_\-]{20,}"),              # tokens GitLab
-    re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"),             # clés Anthropic
-    re.compile(r"sk-proj-[A-Za-z0-9_\-]{20,}"),            # clés OpenAI projet
-    re.compile(r"sk-[A-Za-z0-9]{32,}"),                     # clés type OpenAI (legacy)
-    re.compile(r"(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}"),  # clés Stripe
-    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),                 # clés Google API
-    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),           # tokens Slack
-    re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+"),  # webhooks Slack
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),           # GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_)
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),           # fine-grained PAT
+    re.compile(r"glpat-[A-Za-z0-9_\-]{20,}"),              # GitLab tokens
+    re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"),             # Anthropic keys
+    re.compile(r"sk-proj-[A-Za-z0-9_\-]{20,}"),            # OpenAI project keys
+    re.compile(r"sk-[A-Za-z0-9]{32,}"),                     # OpenAI-style keys (legacy)
+    re.compile(r"(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}"),  # Stripe keys
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),                 # Google API keys
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),           # Slack tokens
+    re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+"),  # Slack webhooks
     re.compile(r"AKIA[0-9A-Z]{16}"),                         # AWS access key id
     re.compile(r"aws_secret_access_key\s*[=:]\s*['\"]?[A-Za-z0-9/+]{40}"),  # AWS secret
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),    # clés privées PEM
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),    # PEM private keys
     re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),  # JWT
-    re.compile(r"(?i)\b(?:password|passwd|api[_-]?key|secret|token|bearer)\b\s*[=:]\s*['\"]?[^\s'\"]{8,}"),  # clé=valeur générique
+    re.compile(r"(?i)\b(?:password|passwd|api[_-]?key|secret|token|bearer)\b\s*[=:]\s*['\"]?[^\s'\"]{8,}"),  # generic key=value
 ]
 
 _ABS_PATH_PATTERNS = [
@@ -36,7 +36,7 @@ _ABS_PATH_PATTERNS = [
 ]
 
 _SECRET_TAG = "[REDACTED-SECRET]"
-_PATH_TAG = "[chemin-local-masqué]"
+_PATH_TAG = "[local-path-redacted]"
 
 
 def scrub_text(text: str | None) -> str:

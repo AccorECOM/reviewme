@@ -1,13 +1,13 @@
-"""Parseur de patch unifié -> positions inline valides (défense anti-422).
+"""Unified patch parser -> valid inline positions (anti-422 defense).
 
-GitHub valide le batch d'une review de façon ATOMIQUE : un seul commentaire sur une
-ligne hors-hunk fait échouer TOUTE la review (422). On construit donc, à partir des
-patches par fichier (`GET /pulls/{n}/files`), l'ensemble des lignes réellement
-commentables côté RIGHT, et on filtre les findings AVANT de poster.
+GitHub validates a review batch ATOMICALLY: a single comment on a line outside a hunk
+makes the WHOLE review fail (422). So from the per-file patches
+(`GET /pulls/{n}/files`) we build the set of lines actually commentable on the RIGHT
+side, and filter findings BEFORE posting.
 
-Une ligne RIGHT-commentable = une ligne présente dans le nouveau fichier à l'intérieur
-d'un hunk : ligne ajoutée (`+`) ou ligne de contexte (` `). On garde aussi le contenu
-réel de la ligne, qui sert d'ancre STABLE au fingerprint.
+A RIGHT-commentable line = a line present in the new file inside a hunk: added line
+(`+`) or context line (` `). We also keep the actual line content, which serves as a
+STABLE anchor for the fingerprint.
 """
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 class LinePos:
     line: int
     content: str
-    added: bool  # True = ligne ajoutée (+), False = ligne de contexte
+    added: bool  # True = added line (+), False = context line
 
 
 def parse_patch(patch: str) -> dict[int, LinePos]:
-    """Map new-file line number -> LinePos, pour un patch d'un fichier."""
+    """Map new-file line number -> LinePos, for a single file's patch."""
     positions: dict[int, LinePos] = {}
     if not patch:
         return positions
@@ -38,7 +38,7 @@ def parse_patch(patch: str) -> dict[int, LinePos]:
         if new_line is None:
             continue
         if not raw:
-            # ligne vide de contexte
+            # empty context line
             positions[new_line] = LinePos(new_line, "", added=False)
             new_line += 1
             continue
@@ -47,22 +47,22 @@ def parse_patch(patch: str) -> dict[int, LinePos]:
             positions[new_line] = LinePos(new_line, body, added=True)
             new_line += 1
         elif tag == "-":
-            pass  # côté LEFT, n'avance pas le compteur new-file
+            pass  # LEFT side, does not advance the new-file counter
         elif tag == "\\":
             pass  # "\ No newline at end of file"
-        else:  # contexte (préfixe espace)
+        else:  # context (space prefix)
             positions[new_line] = LinePos(new_line, body, added=False)
             new_line += 1
     return positions
 
 
 def valid_positions(files: list[dict]) -> dict[str, dict[int, LinePos]]:
-    """À partir de la réponse de `GET /pulls/{n}/files`, renvoie
-    { path: { line_no: LinePos } } des lignes RIGHT-commentables."""
+    """From the `GET /pulls/{n}/files` response, return
+    { path: { line_no: LinePos } } of RIGHT-commentable lines."""
     out: dict[str, dict[int, LinePos]] = {}
     for f in files or []:
         path = f.get("filename")
-        patch = f.get("patch")  # absent pour les fichiers binaires / trop gros
+        patch = f.get("patch")  # missing for binary / too-large files
         if not path or not patch:
             continue
         parsed = parse_patch(patch)
@@ -72,13 +72,13 @@ def valid_positions(files: list[dict]) -> dict[str, dict[int, LinePos]]:
 
 
 def resolve_line(file_map: dict[int, LinePos], claimed_line: int, snippet: str) -> tuple[int, str] | None:
-    """Renvoie (line, content) commentable, en CORRIGEANT un numéro de ligne imprécis du LLM.
+    """Return a commentable (line, content), CORRECTING an imprecise LLM line number.
 
-    Les LLM se trompent souvent de quelques lignes (ils tombent sur une ligne vide voisine).
-    Si le `snippet` fourni par le finding ne correspond pas au contenu de la ligne annoncée,
-    on cherche dans le diff la ligne dont le contenu matche le snippet (la plus proche de la
-    ligne annoncée). Sans snippet exploitable, on retombe sur la ligne annoncée si elle existe.
-    Renvoie None si rien n'est commentable (finding hors-diff)."""
+    LLMs are often off by a few lines (they land on a neighbouring empty line).
+    If the finding's `snippet` does not match the content of the claimed line, we search
+    the diff for the line whose content matches the snippet (the closest to the claimed
+    line). Without a usable snippet, we fall back to the claimed line if it exists.
+    Returns None if nothing is commentable (finding outside the diff)."""
     ns = normalize_line(snippet)
     claimed = file_map.get(claimed_line)
     if claimed is not None and ns and ns in normalize_line(claimed.content):
@@ -95,7 +95,7 @@ def resolve_line(file_map: dict[int, LinePos], claimed_line: int, snippet: str) 
 
 
 def normalize_line(content: str) -> str:
-    """Normalise le contenu d'une ligne pour un fingerprint stable (indépendant de
-    l'indentation/espaces qui bougent). Volontairement agressif : on veut la même clé
-    tant que la logique de la ligne ne change pas."""
+    """Normalize a line's content for a stable fingerprint (independent of shifting
+    indentation/whitespace). Deliberately aggressive: we want the same key as long as
+    the line's logic does not change."""
     return re.sub(r"\s+", " ", content or "").strip()

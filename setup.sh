@@ -8,8 +8,8 @@ echo ""
 errors=0
 
 printf "Checking Python... "
-# La version compte : `command -v python3` renvoie souvent le Python du système, trop
-# ancien pour ce projet. uv installera de toute façon la bonne version dans le venv.
+# The version matters: `command -v python3` often returns the system Python, too
+# old for this project. uv will install the right version in the venv anyway.
 if command -v python3 &>/dev/null; then
     py_version=$(python3 --version 2>&1 | cut -d' ' -f2)
     py_major=$(echo "$py_version" | cut -d. -f1)
@@ -17,7 +17,7 @@ if command -v python3 &>/dev/null; then
     if [ "$py_major" -gt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -ge 13 ]; }; then
         echo "OK ($py_version)"
     else
-        echo "$py_version — trop ancien, 3.13+ requis (uv l'installera dans le venv)"
+        echo "$py_version — too old, 3.13+ required (uv will install it in the venv)"
     fi
 else
     echo "MISSING - Install Python 3.13+"
@@ -114,7 +114,7 @@ CLAUDE_AGENT=${claude_agent}
 MAX_BUDGET_USD=${max_budget}
 POLL_INTERVAL=${poll_interval}
 
-# Reviewers specialises : creer une instance puis decommenter.
+# Specialized reviewers: create an instance, then uncomment.
 #   reviewme init-project <repo> --reviewers tech,i18n
 # REVIEWME_CONFIG_HOME=
 # PROJECT=
@@ -127,12 +127,12 @@ fi
 # --- Install deps ---
 echo ""
 echo "Installing dependencies..."
-# Sans --extra, uv retire les extras deja installes. On preserve github-app s'il l'etait.
+# Without --extra, uv removes already-installed extras. Keep github-app if it was installed.
 if [ -f .venv/bin/python ] && .venv/bin/python -c "import jwt" 2>/dev/null; then
     uv sync --extra github-app
 else
     uv sync
-    echo "  (auth GitHub App : uv sync --extra github-app)"
+    echo "  (GitHub App auth: uv sync --extra github-app)"
 fi
 
 # --- Test connection ---

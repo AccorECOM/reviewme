@@ -1,14 +1,14 @@
-"""`reviewme export --since 7d --out DIR` : l'artefact de fin de période, en deux sorties.
+"""`reviewme export --since 7d --out DIR`: the end-of-period artifact, in two outputs.
 
-- **Machine** : `reviewme-artifact-<date>.tar.gz` — `findings.jsonl`, `runs.jsonl`,
-  `enrich.jsonl`, `prs.jsonl` (filtrés sur la fenêtre), `config-snapshot/`, `stats.json`,
-  `quality.json` (le bloc qualité déjà calculé) et `SCHEMA.md`, qui décrit chaque champ.
-  C'est ce qu'on donne à une analyse pour juger les réglages.
-- **Humain** : `weekly-report.md`, lisible tel quel dans GitHub ou Slack — les stats
-  classiques, puis des stats « fun » qui entretiennent la boucle 👍/👎.
+- **Machine**: `reviewme-artifact-<date>.tar.gz` — `findings.jsonl`, `runs.jsonl`,
+  `enrich.jsonl`, `prs.jsonl` (filtered on the window), `config-snapshot/`, `stats.json`,
+  `quality.json` (the already-computed quality block) and `SCHEMA.md`, which describes
+  every field. This is what an analysis is given to judge the settings.
+- **Human**: `weekly-report.md`, readable as-is in GitHub or Slack — the usual stats,
+  then "fun" stats that keep the 👍/👎 loop alive.
 
-Le rapport ne nomme JAMAIS un développeur à propos d'une remarque négative : les seuls
-classements de personnes portent sur la participation.
+The report NEVER names a developer in connection with a negative finding: the only
+rankings of people are about participation.
 """
 from __future__ import annotations
 
@@ -41,11 +41,11 @@ def _alias(login):
 
 
 def pseudonymize(value):
-    """Remplace les logins par un alias stable (`u-1a2b3c4d`) dans l'archive machine.
+    """Replace logins with a stable alias (`u-1a2b3c4d`) in the machine archive.
 
-    L'analyse a besoin de savoir que deux réactions viennent de la même personne, et si
-    c'est l'auteur de la PR (`role`), pas de savoir QUI conteste quoi. Le rapport humain,
-    lui, ne nomme que pour la participation.
+    The analysis needs to know that two reactions come from the same person, and whether
+    it is the PR author (`role`), not WHO contests what. The human report only names
+    people for participation.
     """
     if isinstance(value, list):
         return [pseudonymize(v) for v in value]
@@ -73,9 +73,9 @@ def quality_of(data: dict[str, list[dict]]) -> dict:
     return compute(data[FINDINGS_FILE], data[RUNS_FILE], data[ENRICH_FILE], data[PRS_FILE])
 
 
-# --------------------------------------------------------------------------- rapport
+# --------------------------------------------------------------------------- report
 
-#: Textes du rapport humain, dans la langue du projet (`[review] language`).
+#: Texts of the human report, in the project's language (`[review] language`).
 _R = {
     "en": {
         "title": "# ReviewMe — report{since}", "classic": "## Usual stats",
@@ -223,7 +223,7 @@ def _fun(q: dict, runs: list[dict], enrich: list[dict], findings: list[dict],
         lien = (f"https://github.com/{repo}/pull/{s['pr']}#discussion_r{s['comment_id']}"
                 if repo else f"PR #{s['pr']}")
         out.append(R["save"].format(rid=s.get("reviewer"), link=lien))
-    # Participation uniquement : jamais de classement sur le contenu des réponses.
+    # Participation only: never a ranking based on the content of replies.
     actifs = Counter()
     for e in latest(enrich, "comment_id").values():
         for r in e.get("reactions", []):
@@ -246,7 +246,7 @@ def _fun(q: dict, runs: list[dict], enrich: list[dict], findings: list[dict],
 def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
            since_label: str = "", stats_file: Path | None = None,
            language: str = "en") -> tuple[Path, Path]:
-    """Écrit l'archive machine et le rapport humain. Renvoie (archive, rapport)."""
+    """Write the machine archive and the human report. Returns (archive, report)."""
     data = load(root, since)
     q = quality_of(data)
     rapport = report(data, q, repo, since_label, language)
