@@ -40,7 +40,27 @@ flowchart LR
     Config --> Engine --> PR[(Pull Request)]
 ```
 
-A project combines two kinds of reviewers.
+A project combines two kinds of reviewers, enabled in different ways:
+
+| | Core reviewer | Custom reviewer |
+|---|---|---|
+| Defined | in the engine | in your repository, `reviewers/<name>/` |
+| How to enable | its name in `core = [...]` in `project.toml` | its folder exists: nothing else to declare |
+| How to disable | remove its name from the list | `enabled = false` in its `reviewer.toml` |
+| Updates | follows the engine | yours |
+
+Full example of a project using both:
+
+```text
+.reviewme/projects/shop/
+├── project.toml              [reviewers] core = ["tech", "conseil"]
+└── reviewers/
+    └── security/             custom reviewer, active because the folder exists
+        ├── reviewer.toml
+        └── system.md
+```
+
+Three reviewers run on its PRs: `tech` and `conseil` (core), `security` (custom).
 
 ### Core reviewers: enable them by name
 

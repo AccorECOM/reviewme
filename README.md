@@ -41,7 +41,27 @@ flowchart LR
     Config --> Moteur --> PR[(Pull Request)]
 ```
 
-Un projet combine deux sortes de relecteurs.
+Un projet combine deux sortes de relecteurs, qui s'activent différemment :
+
+| | Relecteur du core | Relecteur custom |
+|---|---|---|
+| Où il est défini | dans le moteur | dans votre dépôt, `reviewers/<nom>/` |
+| Comment l'activer | son nom dans `core = [...]` du `project.toml` | son dossier existe : rien d'autre à déclarer |
+| Comment le couper | retirer son nom de la liste | `enabled = false` dans son `reviewer.toml` |
+| Mises à jour | suit le moteur | les vôtres |
+
+Exemple complet d'un projet qui utilise les deux :
+
+```text
+.reviewme/projects/boutique/
+├── project.toml              [reviewers] core = ["tech", "conseil"]
+└── reviewers/
+    └── securite/             relecteur custom, actif parce que le dossier existe
+        ├── reviewer.toml
+        └── system.md
+```
+
+Trois relecteurs tournent sur ses PR : `tech` et `conseil` (core), `securite` (custom).
 
 ### Relecteurs du core : à activer par leur nom
 
