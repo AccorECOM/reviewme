@@ -40,7 +40,32 @@ flowchart LR
     Config --> Engine --> PR[(Pull Request)]
 ```
 
-A reviewer is **one folder** with two files:
+A project combines two kinds of reviewers.
+
+### Core reviewers: enable them by name
+
+Shipped with the engine (`config/templates/reviewers/`), they follow its updates. Enable
+them in the project's `project.toml`; removing a name disables it.
+
+```toml
+# .reviewme/projects/shop/project.toml
+[reviewers]
+core = ["tech", "conseil"]
+```
+
+| Name | Role | Output | Requires |
+|---|---|---|---|
+| `tech` | bugs, logic, security, repository conventions | inline | — |
+| `us` | are the ticket's acceptance criteria covered? | one comment, silent when all are covered | Jira (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`) |
+| `i18n` | missing or doubtful translations | inline and summary | translation files in the PR (`*.strings`, `values*/strings.xml`…) |
+| `conseil` | what a human must check themselves on this PR | one comment, silent when nothing applies | — |
+
+### Custom reviewers: a folder in the project
+
+For what is specific to **your** code, a reviewer is a folder under
+`.reviewme/projects/<project>/reviewers/<name>/`, in the reviewed repository (or in a
+separate config repository, via `REVIEWME_CONFIG_HOME`). The name is free; a folder named
+after a core reviewer replaces it for that project.
 
 ```text
 .reviewme/projects/shop/
@@ -117,31 +142,16 @@ uv run reviewme review --repo my-org/my-app --pr 123 --dry-run
 ```
 
 `--dry-run` computes everything and prints what **would** be posted, without writing to
-GitHub. Without `PROJECT`, a single generic reviewer runs (simple mode). To create your
-own reviewers:
+GitHub. Without `PROJECT`, a single generic reviewer runs (simple mode). For a real project, the
+shortest path is a `project.toml` enabling core reviewers (see above):
 
 ```sh
-REVIEWME_CONFIG_HOME=$PWD/.reviewme uv run reviewme init-project my-app --reviewers tech,i18n,conseil
+mkdir -p .reviewme/projects/my-app
+printf '[reviewers]\ncore = ["tech", "conseil"]\n' > .reviewme/projects/my-app/project.toml
+REVIEWME_CONFIG_HOME=$PWD/.reviewme PROJECT=my-app uv run reviewme projects
 ```
 
-Reviewer templates shipped with the skeleton, to copy and adapt:
-
-| Reviewer | Role | Output |
-|---|---|---|
-| `tech` | bugs, logic, security, repository conventions | inline |
-| `us` | are the ticket's criteria covered? | one comment, silent when all are covered |
-| `i18n` | missing or doubtful translations | inline and summary |
-| `conseil` | what a human must check themselves on this PR | one comment, silent when nothing applies |
-
-**Use them without copying** them, from `project.toml`: they then follow engine updates.
-A `reviewers/<id>/` folder with the same name takes precedence, for a project-specific
-version. Removing an id from the list disables it.
-
-```toml
-# .reviewme/projects/shop/project.toml
-[reviewers]
-core = ["tech", "conseil"]
-```
+To start from an editable copy of a core reviewer: `reviewme init-project my-app --reviewers tech`.
 
 In CI: a GitHub Actions example lives in [`deploy/github-actions/`](deploy/github-actions/),
 a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).

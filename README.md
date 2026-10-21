@@ -41,7 +41,32 @@ flowchart LR
     Config --> Moteur --> PR[(Pull Request)]
 ```
 
-Un relecteur, c'est **un dossier** et deux fichiers :
+Un projet combine deux sortes de relecteurs.
+
+### Relecteurs du core : à activer par leur nom
+
+Fournis par le moteur (`config/templates/reviewers/`), ils suivent ses mises à jour. On les
+active dans le `project.toml` du projet ; retirer un nom les désactive.
+
+```toml
+# .reviewme/projects/boutique/project.toml
+[reviewers]
+core = ["tech", "conseil"]
+```
+
+| Nom | Rôle | Sortie | Prérequis |
+|---|---|---|---|
+| `tech` | bugs, logique, sécurité, conventions du dépôt | en ligne | — |
+| `us` | les critères d'acceptation du ticket sont-ils couverts ? | un commentaire, muet si tout est couvert | Jira (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`) |
+| `i18n` | traductions manquantes ou douteuses | en ligne et résumé | fichiers de traduction dans la PR (`*.strings`, `values*/strings.xml`…) |
+| `conseil` | ce qu'un humain doit valider lui-même sur cette PR | un commentaire, muet si rien d'applicable | — |
+
+### Relecteurs custom : un dossier dans le projet
+
+Pour ce qui est propre à **votre** code, un relecteur est un dossier sous
+`.reviewme/projects/<projet>/reviewers/<nom>/`, dans le dépôt relu (ou dans un dépôt de
+config à part, via `REVIEWME_CONFIG_HOME`). Son nom est libre ; un dossier qui porte le nom
+d'un relecteur du core le remplace pour ce projet.
 
 ```text
 .reviewme/projects/boutique/
@@ -118,31 +143,17 @@ uv run reviewme review --repo mon-org/mon-app --pr 123 --dry-run
 ```
 
 `--dry-run` calcule tout et affiche ce qui **serait** posté, sans rien écrire sur GitHub.
-Sans `PROJECT`, un seul relecteur générique tourne (mode simple). Pour créer ses
-relecteurs :
+Sans `PROJECT`, un seul relecteur générique tourne (mode simple). Pour un vrai projet, le
+plus court est un `project.toml` qui active des relecteurs du core (voir plus haut) :
 
 ```sh
-REVIEWME_CONFIG_HOME=$PWD/.reviewme uv run reviewme init-project mon-app --reviewers tech,i18n,conseil
+mkdir -p .reviewme/projects/mon-app
+printf '[reviewers]\ncore = ["tech", "conseil"]\n' > .reviewme/projects/mon-app/project.toml
+REVIEWME_CONFIG_HOME=$PWD/.reviewme PROJECT=mon-app uv run reviewme projects
 ```
 
-Relecteurs types fournis par le squelette, à copier puis adapter :
-
-| Relecteur | Rôle | Sortie |
-|---|---|---|
-| `tech` | bugs, logique, sécurité, conventions du dépôt | en ligne |
-| `us` | les critères du ticket sont-ils couverts ? | un commentaire, muet si tout est couvert |
-| `i18n` | traductions manquantes ou douteuses | en ligne et résumé |
-| `conseil` | ce qu'un humain doit valider lui-même sur cette PR | un commentaire, muet si rien d'applicable |
-
-**Les utiliser sans les copier**, dans `project.toml` : ils suivent alors les évolutions du
-moteur. Un dossier `reviewers/<id>/` du même nom prend le dessus, pour une version propre
-au projet. Retirer un id de la liste le désactive.
-
-```toml
-# .reviewme/projects/boutique/project.toml
-[reviewers]
-core = ["tech", "conseil"]
-```
+Pour partir d'une copie modifiable d'un relecteur du core :
+`reviewme init-project mon-app --reviewers tech`.
 
 En CI : un exemple GitHub Actions est dans [`deploy/github-actions/`](deploy/github-actions/),
 un exemple Bitrise dans [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
