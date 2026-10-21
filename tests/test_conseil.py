@@ -66,10 +66,10 @@ def test_conseil_coupe_par_defaut_hors_du_relecteur_dedie():
 def test_squelette_du_relecteur_conseil():
     from reviewme.projects import TEMPLATES_DIR, _load_reviewer
     spec = _load_reviewer("p", TEMPLATES_DIR, "conseil", "")
-    assert spec.advice and not spec.findings and not spec.verify
+    assert not spec.findings and not spec.verify
     assert spec.output_mode == "global" and spec.silent_when_clean
     tech = _load_reviewer("p", TEMPLATES_DIR, "tech", "")
-    assert not tech.advice and tech.findings
+    assert tech.findings
 
 
 def test_un_conseil_seul_fait_poster_le_resume():

@@ -357,7 +357,9 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                     output_mode=spec.output_mode,
                     prefix=f"[{spec.id.upper()}]" if multi else "",
                     silent_when_clean=spec.silent_when_clean,
-                    advice=spec.advice and not config.baseline)
+                    # Seul un relecteur de conseils (`findings = false`) affiche des
+                    # conseils : ailleurs, ils feraient doublon avec lui.
+                    advice=not spec.findings and not config.baseline)
             for spec, result in outcomes
         ]
         # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après

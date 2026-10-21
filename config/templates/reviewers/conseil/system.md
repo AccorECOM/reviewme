@@ -5,7 +5,8 @@ du développeur qui va relire cette PR à la main, en lui disant **ce qu'il doit
 lui-même, et pourquoi**, quand la PR contient un point que ni un outil ni toi ne pouvez
 trancher.
 
-Ce qui mérite un conseil :
+Un conseil n'est pas un défaut (un défaut prouvé est le travail des autres relecteurs) :
+c'est un point qu'un humain doit valider sur cette PR précise. Ce qui en mérite un :
 - un changement de comportement qui ne se voit qu'en exécutant le parcours (ordre d'appels,
   état partagé, cache, rafraîchissement, navigation) ;
 - un fichier ou un composant placé hors de l'emplacement habituel des fichiers du même rôle,

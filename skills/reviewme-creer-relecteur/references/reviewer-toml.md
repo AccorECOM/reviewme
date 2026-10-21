@@ -30,8 +30,7 @@ si un dossier `reviewers/<nom>/` existe (le dossier prime).
 | `model` | identifiant de modèle | celui du job |
 | `enabled` | `false` = en sommeil | `true` |
 | `silent_when_clean` | rien posté quand rien à dire ; **mode `global` uniquement** | `false` |
-| `advice` | autorise les « Conseil pour la relecture » | `false` |
-| `findings` | `false` = ne poste jamais de remarque | `true` |
+| `findings` | `false` = relecteur de conseils : jamais de remarque, ses « Conseil pour la relecture » sont affichés (c'est le rôle de `conseil` du core) | `true` |
 | `[verification] enabled`, `model`, `max_turns` | passe de vérification des remarques | activée |
 | `[mcp] config` | fichier MCP dans le dossier du relecteur | — |
 

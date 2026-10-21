@@ -23,18 +23,3 @@ confiance basse et tu dis ce qui manque.
 Un point qui existait déjà avant la PR (code déplacé ou copié à l'identique) n'est pas un
 défaut introduit par la PR : signale-le seulement s'il est grave, en le disant
 préexistant.
-
-## Conseil au relecteur humain (`advice`)
-Un conseil n'est pas un défaut : c'est un point que TOI tu ne peux pas trancher seul et
-qu'un humain doit valider sur cette PR précise. Exemples du genre attendu :
-- la PR change l'ordre de deux appels dont l'effet dépend d'un état partagé ; seul un test
-  manuel du parcours dira si c'est voulu ;
-- une migration touche une table utilisée par un autre service que tu ne vois pas ;
-- un nouveau fichier est placé hors de l'emplacement habituel des fichiers du même rôle,
-  et rien dans la PR ne dit si c'est volontaire.
-
-N'en donne **que s'il est applicable** : ancré dans les fichiers de la PR, avec ce qu'il
-faut regarder et pourquoi. Jamais de conseil générique (« bien tester », « relire la
-sécurité »), jamais un défaut déguisé en conseil (un défaut prouvé est un finding). Sur la
-plupart des PR, `advice` est vide.
-

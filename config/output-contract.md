@@ -48,8 +48,8 @@ pas de fence ```). Structure :
 - `summary` : requis, non vide (sert de corps à la review et de fallback).
 - `findings` : liste (éventuellement vide). Un finding sans `path`/`line` exploitable est ignoré.
 - `severity` : une des trois valeurs. `rule_id` et `snippet` sont optionnels (affichage).
-- `advice` : optionnel, **vide par défaut**. Voir « Conseil au relecteur humain » dans la
-  méthode. Trois au plus ; chaque `paths` doit citer des fichiers de la PR.
+- `advice` : réservé aux relecteurs dont la persona le demande (ex. `conseil`) ; sinon,
+  omets-le. Trois au plus ; chaque `paths` doit citer des fichiers de la PR.
 - `evidence` : optionnel mais attendu. La preuve que le finding est vrai, vérifiable par un
   tiers. Chaque finding est relu par une passe de vérification avant d'être posté : un
   finding sans preuve vérifiable sera écarté.

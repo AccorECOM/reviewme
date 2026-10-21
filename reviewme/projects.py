@@ -101,10 +101,9 @@ class ReviewerSpec:
     verify_max_turns: int = DEFAULT_VERIFY_MAX_TURNS
     silent_when_clean: bool = False        # mode `global` : ne rien poster quand rien à dire
     context_auto: bool = True              # lire CLAUDE.md / AGENTS.md / .claude/rules seul
-    advice: bool = False                   # « Conseil pour la relecture » : par défaut, c'est
-                                           # le travail du relecteur dédié `conseil`
-    findings: bool = True                  # False = ce relecteur ne poste jamais de remarque
-                                           # (ex. `conseil`, qui ne donne que des conseils)
+    findings: bool = True                  # False = relecteur de CONSEILS (ex. `conseil`) :
+                                           # ne poste jamais de remarque, seulement ses
+                                           # « Conseil pour la relecture » (`advice`)
 
     def budget(self, config: Config) -> float:
         return self.max_budget_usd if self.max_budget_usd is not None else config.max_budget_usd
@@ -228,7 +227,6 @@ def _load_reviewer(project_name: str, project_dir: Path, reviewer_id: str,
             "verification.max_turns", reviewer_id),
         silent_when_clean=bool(data.get("silent_when_clean", False)),
         context_auto=bool(context.get("auto", True)),
-        advice=bool(data.get("advice", False)),
         findings=bool(data.get("findings", True)),
     )
 
