@@ -1,9 +1,9 @@
-# Reviewer fonctionnel : le code couvre-t-il ce que le ticket demandait ?
-output_mode = "global"     # « AC3 non couvert » n'a aucune ligne de diff à pointer
+# Functional reviewer: does the code cover what the ticket asked for?
+output_mode = "global"     # "AC3 not covered" has no diff line to point to
 priority = 20
-# Contextes exiges. Valeur possible aujourd'hui : "jira_ticket" (ticket + criteres
-# d'acceptation). Une valeur inconnue est refusee au chargement, pas ignoree.
-requires = ["jira_ticket"] # sans ticket détecté (ou Jira non configuré) -> reviewer skippé
-silent_when_clean = true   # tout est couvert -> aucun commentaire, plutôt qu'un « RAS »
+# Required contexts. Possible value today: "jira_ticket" (ticket + acceptance
+# criteria). An unknown value is rejected at load time, not ignored.
+requires = ["jira_ticket"] # no ticket detected (or Jira not configured) -> reviewer skipped
+silent_when_clean = true   # everything is covered -> no comment, rather than a "nothing to report"
 
-# enabled = false        # met ce reviewer en sommeil sans supprimer son dossier
+# enabled = false        # puts this reviewer to sleep without deleting its folder

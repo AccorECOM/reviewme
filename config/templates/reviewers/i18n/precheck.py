@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Precheck i18n : compare les clés de traduction entre langues (ADR v3 D7).
+"""i18n precheck: compares translation keys across languages (ADR v3 D7).
 
-Ce que ce script établit est un FAIT — une clé est présente ou absente, il n'y a rien à
-juger. Le faire ici plutôt qu'au LLM, c'est gratuit, instantané et sans faux positif ; le
-modèle garde ce qui demande vraiment du jugement (wording, variables, pluriels, longueur).
+What this script establishes is a FACT — a key is present or missing, there is nothing to
+judge. Doing it here rather than in the LLM is free, instant and has no false positives; the
+model keeps what really requires judgement (wording, variables, plurals, length).
 
-Formats reconnus : `.strings` (iOS), `strings.xml` (Android), `.json` (web/JS).
-Sortie : markdown sur stdout, injecté tel quel dans le prompt du reviewer.
+Supported formats: `.strings` (iOS), `strings.xml` (Android), `.json` (web/JS).
+Output: markdown on stdout, injected as is into the reviewer's prompt.
 
-Usage : precheck.py --repo /chemin/du/clone   (le diff de la PR arrive sur stdin)
+Usage: precheck.py --repo /path/to/clone   (the PR diff arrives on stdin)
 """
 from __future__ import annotations
 
@@ -20,15 +20,15 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 
-#: Dossiers jamais scannés : dépendances, artefacts de build, outillage local. Sans ça, un
-#: dépôt iOS remonte les localisations de ses paquets tiers (et de tout worktree présent).
+#: Folders never scanned: dependencies, build artefacts, local tooling. Without this, an
+#: iOS repository picks up the localizations of its third-party packages (and of any worktree present).
 _IGNORES = frozenset({
     ".git", ".claude", ".build", "build", "DerivedData", "checkouts",
     "Pods", "Carthage", "node_modules", "vendor", "dist", ".venv",
 })
 
-MAX_FILES = 400          # garde-fou : au-delà, le dépôt n'est pas structuré comme prévu
-MAX_REPORTED = 25        # au-delà, on résume : un mur de clés n'aide personne
+MAX_FILES = 400          # guardrail: beyond this, the repository is not structured as expected
+MAX_REPORTED = 25        # beyond this, we summarize: a wall of keys helps nobody
 
 _STRINGS_RE = re.compile(r'^\s*"((?:[^"\\]|\\.)*)"\s*=', re.MULTILINE)
 _IOS_LANG_RE = re.compile(r"/([A-Za-z-]+)\.lproj/")
@@ -64,12 +64,12 @@ def read_keys(path: Path) -> set[str]:
 
 
 def detect(path: Path, root: Path) -> tuple[str, str] | None:
-    """(langue, bundle) d'un fichier de localisation, ou None si non reconnu.
+    """(language, bundle) of a localization file, or None if not recognized.
 
-    Le « bundle » est le CHEMIN du fichier privé de son segment de langue — pas son simple
-    nom. Un dépôt peut contenir plusieurs `InfoPlist.strings` ou `Localizable.strings` dans
-    des cibles différentes : les regrouper par nom ferait apparaître comme « manquantes »
-    toutes les clés d'un bundle dans les langues d'un autre.
+    The "bundle" is the file's PATH stripped of its language segment — not just its
+    name. A repository can contain several `InfoPlist.strings` or `Localizable.strings` in
+    different targets: grouping them by name would make all the keys of one bundle show up
+    as "missing" in the languages of another.
     """
     rel = path.relative_to(root).as_posix()
     posix = "/" + rel
@@ -94,7 +94,7 @@ def detect(path: Path, root: Path) -> tuple[str, str] | None:
 
 
 def collect(repo: Path) -> dict[str, dict[str, set[str]]]:
-    """{bundle: {langue: clés}} — un « bundle » = un même fichier décliné par langue."""
+    """{bundle: {language: keys}} — a "bundle" = the same file, one variant per language."""
     bundles: dict[str, dict[str, set[str]]] = defaultdict(dict)
     seen = 0
     for pattern in ("**/*.strings", "**/strings*.xml", "**/*.json"):
@@ -120,40 +120,40 @@ def report(bundles: dict[str, dict[str, set[str]]]) -> str:
 
     for bundle, per_lang in sorted(bundles.items()):
         if len(per_lang) < 2:
-            continue  # une seule langue : rien à comparer
+            continue  # a single language: nothing to compare
         union: set[str] = set().union(*per_lang.values())
         gaps = {lang: sorted(union - keys) for lang, keys in per_lang.items()}
         gaps = {lang: missing for lang, missing in gaps.items() if missing}
         langs = ", ".join(f"{lang} ({len(keys)})" for lang, keys in sorted(per_lang.items()))
 
         if not gaps:
-            lines.append(f"- **{bundle}** — {len(union)} clés, complet dans toutes les langues : {langs}")
+            lines.append(f"- **{bundle}** — {len(union)} keys, complete in all languages: {langs}")
             continue
 
         total_missing += sum(len(v) for v in gaps.values())
-        lines.append(f"- **{bundle}** — {len(union)} clés au total ; langues : {langs}")
+        lines.append(f"- **{bundle}** — {len(union)} keys in total; languages: {langs}")
         for lang, missing in sorted(gaps.items()):
             shown = ", ".join(f"`{k}`" for k in missing[:MAX_REPORTED])
-            more = f" … et {len(missing) - MAX_REPORTED} autres" if len(missing) > MAX_REPORTED else ""
-            lines.append(f"  - ❌ **{lang}** : {len(missing)} clé(s) manquante(s) — {shown}{more}")
+            more = f" … and {len(missing) - MAX_REPORTED} more" if len(missing) > MAX_REPORTED else ""
+            lines.append(f"  - ❌ **{lang}**: {len(missing)} missing key(s) — {shown}{more}")
 
     if not lines:
-        return "Aucun jeu de fichiers de localisation multilingue détecté dans ce dépôt."
+        return "No multilingual set of localization files detected in this repository."
 
-    header = ("Toutes les clés sont présentes dans toutes les langues."
+    header = ("All keys are present in all languages."
               if total_missing == 0 else
-              f"**{total_missing} clé(s) manquante(s)** au total.")
-    return f"## Complétude des traductions\n\n{header}\n\n" + "\n".join(lines)
+              f"**{total_missing} missing key(s)** in total.")
+    return f"## Translation completeness\n\n{header}\n\n" + "\n".join(lines)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default=".", help="racine du dépôt à analyser")
+    parser.add_argument("--repo", default=".", help="root of the repository to analyse")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
     if not repo.is_dir():
-        print(f"Dépôt introuvable : {repo}", file=sys.stderr)
+        print(f"Repository not found: {repo}", file=sys.stderr)
         return 1
 
     print(report(collect(repo)))

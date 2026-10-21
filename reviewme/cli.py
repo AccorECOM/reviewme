@@ -57,7 +57,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     en.add_argument("--pr", dest="en_pr", type=int, help="Une seule PR")
     en.add_argument("--repo", dest="en_repo", help="OWNER/REPO (sinon GITHUB_REPO)")
 
-    ex = sub.add_parser("export", help="Archive d'analyse (JSONL) + rapport-semaine.md")
+    ex = sub.add_parser("export", help="Analysis archive (JSONL) + weekly-report.md")
     ex.add_argument("--since", default="7d", help="Fenêtre, ex. 7d (défaut : 7d)")
     ex.add_argument("--out", required=True, help="Dossier de sortie")
     ex.add_argument("--repo", dest="ex_repo", help="OWNER/REPO, pour les liens du rapport")
@@ -107,12 +107,12 @@ def _init_project(name: str, reviewer_ids: list[str]) -> int:
 def _list_projects() -> int:
     root = projects_dir()
     if not root.is_dir():
-        print(f"Aucun projet configuré ({root} n'existe pas).")
-        print("Créer le premier : reviewme init-project <repo> --reviewers tech,us")
+        print(f"No project configured ({root} does not exist).")
+        print("Create the first one: reviewme init-project <repo> --reviewers tech,us")
         return 0
     names = sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
     if not names:
-        print("Aucun projet configuré.")
+        print("No project configured.")
         return 0
     for name in names:
         try:
@@ -243,10 +243,15 @@ def _export(args) -> int:
     from .enrich import parse_since
     from .export import export
     from .ledger import ledger_dir
-
+    from .projects import ProjectConfigError, resolve_project
     repo = args.ex_repo or os.environ.get("GITHUB_REPO", "")
+    # Langue du rapport : celle du projet si on la connaît, sinon REVIEWME_LANGUAGE.
+    try:
+        language = resolve_project(load_config(require_repo=False)).language
+    except (ProjectConfigError, RuntimeError, ValueError):
+        language = os.environ.get("REVIEWME_LANGUAGE", "en")
     archive, rapport = export(ledger_dir(), Path(args.out), parse_since(args.since),
-                              repo=repo, since_label=f"({args.since})")
+                              repo=repo, since_label=f"({args.since})", language=language)
     print(f"Archive : {archive}")
     print(f"Rapport : {rapport}")
     return 0

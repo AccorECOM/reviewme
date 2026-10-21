@@ -1,174 +1,174 @@
 # ReviewMe
 
-🇫🇷 Français · [🇬🇧 English](README.en.md)
+🇬🇧 English · [🇫🇷 Français](README.fr.md)
 
-**Un bot de code review par IA pour les Pull Requests GitHub.** Il lit le diff et le
-dépôt, puis poste des commentaires **ligne par ligne**, comme un relecteur humain.
-Plusieurs relecteurs spécialisés peuvent tourner sur la même PR : technique, sécurité,
-traductions, critères du ticket…
+**An AI code review bot for GitHub Pull Requests.** It reads the diff and the repository,
+then posts **line-by-line** comments, like a human reviewer. Several specialised
+reviewers can run on the same PR: technical, security, translations, ticket criteria…
 
 ```text
-src/orders/service.py, ligne 42
-[IMPORTANT] `charge()` est appelée sans `await` : le paiement part en tâche de fond et
-l'erreur éventuelle est perdue. Ajouter `await` et laisser l'exception remonter.
+src/orders/service.py, line 42
+[IMPORTANT] `charge()` is called without `await`: the payment runs in the background and
+any error is lost. Add `await` and let the exception propagate.
 ```
 
 ---
 
-## Le principe : la méthode dans le moteur, la connaissance dans la config
+## The idea: method in the engine, knowledge in the config
 
-ReviewMe sépare deux choses :
+ReviewMe keeps two things apart:
 
-- **le moteur (ce dépôt)** sait *comment* relire : la méthode, le format de sortie, la
-  vérification, la sécurité, le dialogue avec GitHub. Il est le même pour tous les projets ;
-- **un relecteur (un dossier de config)** sait *quoi* chercher dans *ce* projet : sa
-  persona, ses règles, quand il se déclenche. Une équipe en écrit autant qu'elle veut.
+- **the engine (this repository)** knows *how* to review: the method, the output format,
+  the verification pass, security, talking to GitHub. It is the same for every project;
+- **a reviewer (a config folder)** knows *what* to look for in *this* project: its persona,
+  its rules, when it runs. A team writes as many as it needs.
 
 ```mermaid
 flowchart LR
-    subgraph Moteur["Moteur (ce dépôt) : comment relire"]
-        M1[Méthode en 2 phases]
-        M2[Contrat de sortie JSON]
-        M3[Passe de vérification]
-        M4[Sécurité et GitHub]
+    subgraph Engine["Engine (this repo): how to review"]
+        M1[Two-phase method]
+        M2[JSON output contract]
+        M3[Verification pass]
+        M4[Security and GitHub]
     end
-    subgraph Config["Config d'un projet : quoi chercher"]
+    subgraph Config["Project config: what to look for"]
         R1["reviewers/tech/"]
-        R2["reviewers/securite/"]
+        R2["reviewers/security/"]
         R3["reviewers/i18n/"]
-        C["common/ (règles d'équipe)"]
+        C["common/ (team rules)"]
     end
-    Config --> Moteur --> PR[(Pull Request)]
+    Config --> Engine --> PR[(Pull Request)]
 ```
 
-Un projet combine deux sortes de relecteurs, qui s'activent différemment :
+A project combines two kinds of reviewers, enabled in different ways:
 
-| | Relecteur du core | Relecteur custom |
+| | Core reviewer | Custom reviewer |
 |---|---|---|
-| Où il est défini | dans le moteur | dans votre dépôt, `reviewers/<nom>/` |
-| Comment l'activer | son nom dans `core = [...]` du `project.toml` | son dossier existe : rien d'autre à déclarer |
-| Comment le couper | retirer son nom de la liste | `enabled = false` dans son `reviewer.toml` |
-| Mises à jour | suit le moteur | les vôtres |
+| Defined | in the engine | in your repository, `reviewers/<name>/` |
+| How to enable | its name in `core = [...]` in `project.toml` | its folder exists: nothing else to declare |
+| How to disable | remove its name from the list | `enabled = false` in its `reviewer.toml` |
+| Updates | follows the engine | yours |
 
-Exemple complet d'un projet qui utilise les deux :
+Full example of a project using both:
 
 ```text
-.reviewme/projects/boutique/
-├── project.toml              [reviewers] core = ["tech", "conseil"]
+.reviewme/projects/shop/
+├── project.toml              [reviewers] core = ["tech", "advisor"]
 └── reviewers/
-    └── securite/             relecteur custom, actif parce que le dossier existe
+    └── security/             custom reviewer, active because the folder exists
         ├── reviewer.toml
         └── system.md
 ```
 
-Trois relecteurs tournent sur ses PR : `tech` et `conseil` (core), `securite` (custom).
+Three reviewers run on its PRs: `tech` and `advisor` (core), `security` (custom).
 
-### Relecteurs du core : à activer par leur nom
+### Core reviewers: enable them by name
 
-Fournis par le moteur (`config/templates/reviewers/`), ils suivent ses mises à jour. On les
-active dans le `project.toml` du projet ; retirer un nom les désactive.
+Shipped with the engine (`config/templates/reviewers/`), they follow its updates. Enable
+them in the project's `project.toml`; removing a name disables it.
 
 ```toml
-# .reviewme/projects/boutique/project.toml
+# .reviewme/projects/shop/project.toml
 [reviewers]
-core = ["tech", "conseil"]
+core = ["tech", "advisor"]
 ```
 
-| Nom | Rôle | Sortie | Prérequis |
+| Name | Role | Output | Requires |
 |---|---|---|---|
-| `tech` | bugs, logique, sécurité, conventions du dépôt | en ligne | — |
-| `us` | les critères d'acceptation du ticket sont-ils couverts ? | un commentaire, muet si tout est couvert | Jira (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`) |
-| `i18n` | traductions manquantes ou douteuses | en ligne et résumé | fichiers de traduction dans la PR (`*.strings`, `values*/strings.xml`…) |
-| `conseil` | ce qu'un humain doit valider lui-même sur cette PR | un commentaire, muet si rien d'applicable | — |
+| `tech` | bugs, logic, security, repository conventions | inline | — |
+| `us` | are the ticket's acceptance criteria covered? | one comment, silent when all are covered | Jira (`JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`) |
+| `i18n` | missing or doubtful translations | inline and summary | translation files in the PR (`*.strings`, `values*/strings.xml`…) |
+| `advisor` | what a human must check themselves on this PR | one comment, silent when nothing applies | — |
 
-**Les adapter sans les copier** : le projet peut indiquer à un relecteur du core où est
-sa doc, quand tourner et ce qu'il doit savoir. Le reste (méthode, sortie, vérification)
-reste celui du moteur.
+**Adapt them without copying**: the project can tell a core reviewer where its docs
+are, when to run and what it should know. Everything else (method, output, verification)
+stays the engine's.
 
 ```toml
 [reviewers.tech]
-read = ["Documentation/ARCHITECTURE.md", "Documentation/"]   # ajouté à sa lecture
-paths = ["src/**"]                                            # quand il tourne
-instructions = "Les services métier sont dans src/services ; pas d'appel réseau dans les vues."
+read = ["Documentation/ARCHITECTURE.md", "Documentation/"]   # added to what it reads
+paths = ["src/**"]                                            # when it runs
+instructions = "Business services live in src/services; no network calls from views."
 # model = "…"   max_turns = 50   priority = 10   enabled = false
 ```
 
-**Laisser une IA le faire** : le skill [`skills/reviewme-creer-relecteur`](skills/reviewme-creer-relecteur/SKILL.md)
-guide Claude Code pour explorer le dépôt, choisir entre adapter un relecteur du core et en
-créer un, écrire une persona courte et valider la config. Copiez-le dans `.claude/skills/`
-du projet, puis demandez par exemple « ajoute un relecteur qui vérifie nos migrations ».
+**Let an AI do it**: the [`skills/reviewme-create-reviewer`](skills/reviewme-create-reviewer/SKILL.md)
+skill guides Claude Code to explore the repository, choose between adapting a
+core reviewer and creating one, write a short persona and validate the config. Copy it into
+the project's `.claude/skills/`, then ask for instance "add a reviewer that checks our
+migrations".
 
-### Relecteurs custom : un dossier dans le projet
+### Custom reviewers: a folder in the project
 
-Pour ce qui est propre à **votre** code, un relecteur est un dossier sous
-`.reviewme/projects/<projet>/reviewers/<nom>/`, dans le dépôt relu (ou dans un dépôt de
-config à part, via `REVIEWME_CONFIG_HOME`). Son nom est libre ; un dossier qui porte le nom
-d'un relecteur du core le remplace pour ce projet.
+For what is specific to **your** code, a reviewer is a folder under
+`.reviewme/projects/<project>/reviewers/<name>/`, in the reviewed repository (or in a
+separate config repository, via `REVIEWME_CONFIG_HOME`). The name is free; a folder named
+after a core reviewer replaces it for that project.
 
 ```text
-.reviewme/projects/boutique/
-├── project.toml                 réglages du projet (optionnel)
+.reviewme/projects/shop/
+├── project.toml                 project settings (optional)
 ├── common/
-│   └── regles-terrain.md        règles de l'équipe, communes à tous les relecteurs
+│   └── team-rules.md            team rules, shared by every reviewer
 └── reviewers/
-    └── securite/
-        ├── reviewer.toml        quand il tourne, ce qu'il lit
-        └── system.md            sa persona : ce qu'il cherche dans CE projet
+    └── security/
+        ├── reviewer.toml        when it runs, what it reads
+        └── system.md            its persona: what it looks for in THIS project
 ```
 
 ```toml
-# reviewers/securite/reviewer.toml
+# reviewers/security/reviewer.toml
 output_mode = "inline"                 # inline | global | mixed
 priority    = 10
 
-[when]                                 # ne tourne que si ces fichiers changent
+[when]                                 # only runs when these files change
 paths = ["src/api/**", "src/auth/**"]
 
-[context]                              # lus dans le dépôt relu, jamais recopiés ici
-read = ["docs/securite.md"]
+[context]                              # read from the reviewed repo, never copied here
+read = ["docs/security.md"]
 
 ```
 
 ```markdown
-<!-- reviewers/securite/system.md -->
-# Relecteur sécurité de la boutique
-Tu cherches : routes sans contrôle d'accès, SQL construit par concaténation, secrets en
-dur, données client écrites dans les logs. Les décorateurs `@public` sont volontaires.
+<!-- reviewers/security/system.md -->
+# Shop security reviewer
+You look for: routes without access control, SQL built by string concatenation,
+hard-coded secrets, customer data written to logs. `@public` decorators are intentional.
 ```
 
-Le moteur ajoute tout seul la méthode, le format de sortie et les fichiers d'instructions
-du dépôt (`CLAUDE.md`, `AGENTS.md`, `.claude/rules/`). La persona reste courte.
+The engine adds the method, the output format and the repository's instruction files
+(`CLAUDE.md`, `AGENTS.md`, `.claude/rules/`) on its own. The persona stays short.
 
 ---
 
-## Le parcours d'une PR
+## The life of a PR
 
 ```mermaid
 flowchart TD
-    A[PR ouverte ou mise à jour] --> B{Quels relecteurs ?}
-    B -->|"when.paths, ticket présent…"| C[Contexte : règles du dépôt,<br/>ticket, faits du precheck]
-    C --> D["Phase 1 + 2 : claude -p<br/>chasse, puis preuve par remarque"]
-    D --> E["Vérification : un 2e claude -p<br/>confirme ou infirme chaque remarque"]
-    E -->|infirmée| X[(Registre seulement)]
-    E -->|confirmée| F{Filtres}
-    F -->|"BLOCKER, IMPORTANT"| G[Commentaire en ligne]
-    F -->|"MINOR, code déplacé, hors diff"| H[Résumé unique]
-    F -->|"déjà dit, plafond atteint"| X
-    G --> R[(Registre)]
+    A[PR opened or updated] --> B{Which reviewers?}
+    B -->|"when.paths, ticket found…"| C[Context: repo rules,<br/>ticket, precheck facts]
+    C --> D["Phase 1 + 2: claude -p<br/>hunt, then evidence per finding"]
+    D --> E["Verification: a 2nd claude -p<br/>confirms or refutes each finding"]
+    E -->|refuted| X[(Ledger only)]
+    E -->|confirmed| F{Filters}
+    F -->|"BLOCKER, IMPORTANT"| G[Inline comment]
+    F -->|"MINOR, moved code, outside diff"| H[Single summary]
+    F -->|"already said, cap reached"| X
+    G --> R[(Ledger)]
     H --> R
 ```
 
-- **Chaque relecteur est un `claude -p` indépendant**, en lecture seule (`Read`, `Grep`,
-  `Glob`, `git log/show/diff`), lancé en parallèle.
-- **La vérification remplace le seuil de confiance comme filtre principal.** Un second
-  appel reçoit les remarques et doit citer la ligne qui prouve chacune ; ce qui n'est pas
-  prouvé n'est pas posté.
-- **Pas de doublon d'un commit à l'autre** : chaque commentaire porte une empreinte de sa
-  ligne. Si la ligne change, le bot répond dans le fil au lieu de reposter.
+- **Each reviewer is an independent, read-only `claude -p`** (`Read`, `Grep`, `Glob`,
+  `git log/show/diff`), run in parallel.
+- **Verification replaces the confidence threshold as the main filter.** A second call
+  receives the findings and must cite the line that proves each one; anything unproven
+  is not posted.
+- **No duplicates across commits**: every comment carries a fingerprint of its line. When
+  the line changes, the bot replies in the thread instead of posting again.
 
 ---
 
-## Démarrer en 5 minutes
+## Start in 5 minutes
 
 ```sh
 git clone https://github.com/AccorECOM/reviewme.git && cd reviewme
@@ -176,110 +176,116 @@ uv sync
 npm install -g @anthropic-ai/claude-code
 cp .env.example .env            # GITHUB_TOKEN, GITHUB_REPO, REPO_PATH
 
-uv run reviewme review --repo mon-org/mon-app --pr 123 --dry-run
+uv run reviewme review --repo my-org/my-app --pr 123 --dry-run
 ```
 
-`--dry-run` calcule tout et affiche ce qui **serait** posté, sans rien écrire sur GitHub.
-Sans `PROJECT`, un seul relecteur générique tourne (mode simple). Pour un vrai projet, le
-plus court est un `project.toml` qui active des relecteurs du core (voir plus haut) :
+`--dry-run` computes everything and prints what **would** be posted, without writing to
+GitHub. Without `PROJECT`, a single generic reviewer runs (simple mode). For a real project, the
+shortest path is a `project.toml` enabling core reviewers (see above):
 
 ```sh
-mkdir -p .reviewme/projects/mon-app
-printf '[reviewers]\ncore = ["tech", "conseil"]\n' > .reviewme/projects/mon-app/project.toml
-REVIEWME_CONFIG_HOME=$PWD/.reviewme PROJECT=mon-app uv run reviewme projects
+mkdir -p .reviewme/projects/my-app
+printf '[reviewers]\ncore = ["tech", "advisor"]\n' > .reviewme/projects/my-app/project.toml
+REVIEWME_CONFIG_HOME=$PWD/.reviewme PROJECT=my-app uv run reviewme projects
 ```
 
-Pour partir d'une copie modifiable d'un relecteur du core :
-`reviewme init-project mon-app --reviewers tech`.
+To start from an editable copy of a core reviewer: `reviewme init-project my-app --reviewers tech`.
 
-En CI : un exemple GitHub Actions est dans [`deploy/github-actions/`](deploy/github-actions/),
-un exemple Bitrise dans [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
+In CI: a GitHub Actions example lives in [`deploy/github-actions/`](deploy/github-actions/),
+a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 
 ---
 
-## Ce qui arrive sur la PR
+## What lands on the PR
 
-| Remarque | Où | Pourquoi |
+| Finding | Where | Why |
 |---|---|---|
-| `BLOCKER`, `IMPORTANT` sur du code introduit par la PR | en ligne | c'est ce qui mérite l'attention du dev |
-| `MINOR` | résumé | utile, mais pas au prix d'une notification par ligne |
-| sur du code seulement **déplacé** par la PR | résumé, tagué | ce n'est pas un défaut de la PR |
-| hors des lignes du diff | résumé | GitHub refuse un commentaire hors diff |
-| non confirmée par la vérification | nulle part (registre) | un faux positif coûte la confiance de l'équipe |
-| **💡 Conseil pour la relecture** (relecteur `conseil`) : un point qu'un humain doit valider lui-même (ordre d'appels modifié, fichier rangé hors de son dossier habituel…) | un commentaire | seulement s'il est applicable, ancré dans des fichiers de la PR ; 3 au plus |
-| PR propre | rien | le silence vaut mieux qu'un « RAS » |
+| `BLOCKER`, `IMPORTANT` on code introduced by the PR | inline | worth the developer's attention |
+| `MINOR` | summary | useful, but not worth a notification per line |
+| on code the PR only **moved** | summary, tagged | not a defect of this PR |
+| outside the diff lines | summary | GitHub rejects comments outside the diff |
+| not confirmed by verification | nowhere (ledger) | a false positive costs the team's trust |
+| **💡 Review tip** (`advisor` reviewer): something a human must check themselves (call order changed, file placed outside its usual folder…) | one comment | only when it applies, anchored in files of the PR; 3 at most |
+| clean PR | nothing | silence beats a "LGTM" |
 
-Le bot ne poste que des commentaires : jamais d'approbation ni de demande de changement.
+The language of the posted remarks and of the bot's headings is set per project in
+`project.toml`: `[review] language = "fr"` (default `en`).
+
+The bot only posts comments: never an approval or a change request.
 
 ---
 
-## Mesurer si c'est utile
+## Measuring whether it helps
 
 ```mermaid
 flowchart LR
-    R[review] -->|chaque remarque,<br/>postée ou non| L[(registre)]
-    N["enrich (chaque nuit)"] -->|"👍/👎, réponses,<br/>ligne corrigée ?"| L
+    R[review] -->|every finding,<br/>posted or not| L[(ledger)]
+    N["enrich (nightly)"] -->|"👍/👎, replies,<br/>line fixed?"| L
     L --> S[reviewme stats]
     L --> X["reviewme export"]
-    X --> A[archive JSONL<br/>pour l'analyse]
-    X --> W[rapport-semaine.md<br/>pour l'équipe]
+    X --> A[JSONL archive<br/>for analysis]
+    X --> W[weekly-report.md<br/>for the team]
 ```
 
-Le registre garde **toutes** les remarques avec leur sort et leur confiance, y compris
-celles écartées. On peut donc répondre à « ce seuil nous coûte-t-il des vrais bugs ? ».
-`reviewme stats` affiche, par relecteur, la part de remarques suivies d'effet, approuvées
-et contestées, et la calibration par tranche de confiance. Le schéma est décrit dans
-[`docs/registre-schema.md`](docs/registre-schema.md). Le texte des remarques n'y est écrit
-que si le projet le demande (`[ledger] include_text = true`).
+The ledger keeps **every** finding with its fate and confidence, including the dropped
+ones, so you can answer "is this threshold costing us real bugs?". `reviewme stats` shows,
+per reviewer, the share of findings acted upon, approved and contested, and calibration by
+confidence band. The schema is in [`docs/ledger-schema.md`](docs/ledger-schema.md).
+Finding text is only stored when the project asks for it
+(`[ledger] include_text = true`).
 
 ---
 
-## Sécurité
+## Security
 
-Le diff, le ticket et les commentaires sont écrits par des tiers : ce sont des
-**données**, jamais des instructions.
+The diff, the ticket and the comments are written by third parties: they are **data**,
+never instructions.
 
-- **Outils en lecture seule**, liste verrouillée dans le code : ni `Write`, ni sous-agents,
-  ni `--dangerously-skip-permissions`. Ni les hooks ni les serveurs MCP du dépôt relu ne
-  sont chargés.
-- **Une PR ne change pas sa propre relecture** : si la config vit dans le dépôt relu
-  (`.reviewme/`), elle est lue sur la branche de base, tout comme `CLAUDE.md` et
-  `.claude/rules/`. Pour tester un nouveau relecteur dans sa PR, on lance un build à la
-  main avec `REVIEWME_CONFIG_SOURCE=pr`.
-- Secrets et chemins absolus masqués avant tout post ; webhook refusé sans signature HMAC.
-- Un `precheck` est du code fourni par le projet : il se relit comme du code.
+- **Read-only tools**, allowlist locked in code: no `Write`, no sub-agents, never
+  `--dangerously-skip-permissions`. Hooks and MCP servers of the reviewed repo are not
+  loaded.
+- **A PR cannot change its own review**: when the config lives in the reviewed repo
+  (`.reviewme/`), it is read from the base branch, as are `CLAUDE.md` and `.claude/rules/`.
+  To try a new reviewer inside its own PR, start a build by hand with
+  `REVIEWME_CONFIG_SOURCE=pr`.
+- Secrets and absolute paths are scrubbed before posting; the webhook rejects unsigned
+  requests (HMAC).
+- A `precheck` is code supplied by the project: review it like code.
 
 ---
 
-## Référence rapide
+## Quick reference
 
-| Commande | Rôle |
+| Command | Purpose |
 |---|---|
-| `reviewme review --repo O/R --pr N` | relire une PR (`--dry-run`, `--force`) |
-| `reviewme init-project <nom> --reviewers tech,us` | créer un projet depuis le squelette |
-| `reviewme projects` | lister les projets et leurs relecteurs |
-| `reviewme enrich --since 14d` | relever le devenir des remarques (job de nuit) |
-| `reviewme export --since 7d --out DIR` | archive d'analyse et rapport lisible |
-| `reviewme stats [--html F]` | compteurs et bloc qualité |
-| `reviewme feedback --pr N` | réponses des devs, en règles à relire |
-| `reviewme-webhook` · `reviewme-poll` · `reviewme-web` | serveur webhook, boucle de poll, tableau de bord |
+| `reviewme review --repo O/R --pr N` | review one PR (`--dry-run`, `--force`) |
+| `reviewme init-project <name> --reviewers tech,us` | create a project from the skeleton |
+| `reviewme projects` | list projects and their reviewers |
+| `reviewme enrich --since 14d` | record what happened to posted findings (nightly) |
+| `reviewme export --since 7d --out DIR` | analysis archive and readable report |
+| `reviewme stats [--html F]` | counters and quality block |
+| `reviewme feedback --pr N` | developer replies, as rules to review |
+| `reviewme-webhook` · `reviewme-poll` · `reviewme-web` | webhook server, poll loop, dashboard |
 
-| Variable | Rôle |
+| Variable | Purpose |
 |---|---|
-| `GITHUB_TOKEN` (ou `GITHUB_APP_ID` + clé) | accès GitHub |
-| `REPO_PATH` | clone local du dépôt relu |
-| `REVIEWME_CONFIG_HOME`, `PROJECT` | où est la config, et quel projet |
-| `CONFIDENCE_THRESHOLD` | seuil de confiance (défaut 80) |
-| `MAX_COMMENTS_PER_PR` | plafond de commentaires par PR (défaut 10) |
-| `REVIEWME_INLINE_MIN_SEVERITY` | sévérité minimale en ligne (défaut `IMPORTANT`) |
-| `REVIEWME_VERIFY` | `0` coupe la vérification |
-| `REVIEWME_CONFIG_SOURCE` | `base` (défaut) ou `pr` |
-| `REVIEWME_FAKE`, `REVIEWME_DEBUG` | sans appel au modèle ; journal détaillé |
-| `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | passerelle LLM, modèle |
+| `GITHUB_TOKEN` (or `GITHUB_APP_ID` + key) | GitHub access |
+| `REPO_PATH` | local clone of the reviewed repo |
+| `REVIEWME_CONFIG_HOME`, `PROJECT` | where the config lives, which project |
+| `CONFIDENCE_THRESHOLD` | confidence threshold (default 80) |
+| `MAX_COMMENTS_PER_PR` | comment cap per PR (default 10) |
+| `REVIEWME_INLINE_MIN_SEVERITY` | lowest severity posted inline (default `IMPORTANT`) |
+| `REVIEWME_VERIFY` | `0` turns verification off |
+| `REVIEWME_CONFIG_SOURCE` | `base` (default) or `pr` |
+| `REVIEWME_FAKE`, `REVIEWME_DEBUG` | no model call; verbose log |
+| `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | LLM gateway, model |
 
-Toutes les clés, commentées : [`.env.example`](.env.example). Toutes les options de
-`reviewer.toml` : [`docs/reviewme.html`](docs/reviewme.html). Limites connues :
-[`ROADMAP.md`](ROADMAP.md).
+| `project.toml` key | Purpose |
+|---|---|
+| `[review] language` | language of the posted remarks and of the bot's headings (default `en`, e.g. `"fr"`) |
+
+Every key, commented (French): [`.env.example`](.env.example). Every `reviewer.toml`
+option: [`docs/reviewme.html`](docs/reviewme.html). Known limits: [`ROADMAP.md`](ROADMAP.md).
 
 ## Tests
 

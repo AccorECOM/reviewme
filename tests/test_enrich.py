@@ -234,9 +234,17 @@ def test_export_archive_et_rapport():
             archive_text = tar.extractfile(membre).read().decode()
         texte = rapport.read_text()
     assert {"findings.jsonl", "runs.jsonl", "enrich.jsonl", "prs.jsonl", "quality.json",
-            "SCHEMA.md", "rapport-semaine.md"} <= noms
-    assert "## Stats classiques" in texte and "## Stats fun" in texte
-    assert "Sauvetage" in texte and "discussion_r1" in texte
+            "SCHEMA.md", "weekly-report.md"} <= noms
+    assert "## Usual stats" in texte and "## Fun stats" in texte
+    assert "Save of the week" in texte and "discussion_r1" in texte
     # Participation uniquement : l'auteur qui a contesté n'est pas désigné comme tel.
-    assert "auteur" not in texte.split("## Stats fun")[0]
+    assert "auteur" not in texte.split("## Fun stats")[0]
     assert "dev" not in archive_text and "u-" in archive_text
+
+
+def test_rapport_en_francais():
+    lines, pr = _enrich_one()
+    data = {"findings.jsonl": [_row(1, 10, content="let x = y!")], "runs.jsonl": [],
+            "enrich.jsonl": lines, "prs.jsonl": [pr]}
+    texte = ex.report(data, ex.quality_of(data), "o/r", "", "fr")
+    assert "## Stats classiques" in texte and "## Stats fun" in texte

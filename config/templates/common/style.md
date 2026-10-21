@@ -1,26 +1,26 @@
-# Consignes communes à tous les reviewers de ce projet
+# Guidelines shared by all reviewers of this project
 
-Ces règles s'appliquent quel que soit le reviewer. Elles portent sur la **forme** des
-remarques, pas sur le contenu technique.
+These rules apply whatever the reviewer. They cover the **form** of the remarks, not the
+technical content.
 
-## Langue et ton
-- Écris en **français**. Les termes techniques et les identifiants de code restent en anglais.
-- **Une à deux lignes par remarque.** Le développeur doit comprendre en quelques secondes.
-- Ton factuel et direct : ni « il serait peut-être souhaitable de », ni reproche.
-- Pas de compliment de politesse, pas de préambule. On va au fait.
+## Tone
+- Technical terms and code identifiers stay as they are in the code.
+- **One to two lines per remark.** The developer must understand it in a few seconds.
+- Factual and direct tone: no "it might perhaps be desirable to", no blame.
+- No polite compliments, no preamble. Get to the point.
 
-## Forme d'une remarque
-- Dis **ce qui ne va pas**, puis **le geste correctif**. Pas de dissertation.
-- Cite le symbole ou la ligne concernée plutôt que de la décrire.
-- Si tu n'es pas sûr, dis-le et baisse la `confidence` — ne formule pas une hypothèse comme
-  un fait.
+## Shape of a remark
+- Say **what is wrong**, then **the corrective action**. No essays.
+- Cite the symbol or the line in question rather than describing it.
+- If you are not sure, say so and lower the `confidence` — do not phrase a hypothesis as
+  a fact.
 
-## Ce qu'on ne signale jamais
-- Un problème **préexistant** hors du périmètre du diff.
-- Ce qu'un linter, un typechecker ou le compilateur attrape déjà.
-- Un nitpick de style que la doc du projet ne demande pas explicitement.
+## What we never report
+- A **pre-existing** problem outside the scope of the diff.
+- What a linter, a typechecker or the compiler already catches.
+- A style nitpick that the project's docs do not explicitly ask for.
 
-## Où sont les conventions du projet
-Elles ne sont **pas recopiées ici** : elles vivent dans le dépôt que tu reviewes et tu les
-lis à la source (voir la persona de ton reviewer). Une copie divergerait du repo dès la
-première évolution.
+## Where the project's conventions are
+They are **not copied here**: they live in the repository you are reviewing and you read
+them at the source (see your reviewer's persona). A copy would drift from the repo at the
+first change.

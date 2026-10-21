@@ -31,7 +31,8 @@ from pathlib import Path
 
 from .diff_utils import normalize_line
 from .ledger import FINDINGS_FILE, SCHEMA_VERSION, read_all, write_part
-from .reconciler import _MARKER_RE, _SIGNATURE, fingerprint_hash, marker_key
+from .reconciler import _MARKER_RE, fingerprint_hash, marker_key
+from .strings import ALL_SIGNATURES
 
 ENRICH_FILE = "enrich.jsonl"
 PRS_FILE = "prs.jsonl"
@@ -90,7 +91,7 @@ def _is_bot(comment: dict) -> bool:
     """Un commentaire du bot se reconnaît à son marqueur ou à sa signature, jamais à
     l'auteur : avec un PAT, le bot commente sous l'identité d'un humain."""
     body = comment.get("body", "") or ""
-    return marker_key(body) is not None or _SIGNATURE in body
+    return marker_key(body) is not None or any(sig in body for sig in ALL_SIGNATURES)
 
 
 def _is_machine(comment: dict) -> bool:

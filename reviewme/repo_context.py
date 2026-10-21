@@ -161,7 +161,7 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
         if reader.is_dir(rel) and not reader.is_file(rel):
             docs = reader.list_md(rel)[:MAX_LISTED]
             if docs:
-                parts.append(f"### Documents disponibles dans `{raw}` (ouvre ceux qui concernent la PR)\n"
+                parts.append(f"### Documents available in `{raw}` (open the ones relevant to the PR)\n"
                              + "\n".join(f"- `{d}`" for d in docs))
             continue
 
@@ -173,7 +173,7 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
         taille = len(text)
         tronque = taille > MAX_FILE_BYTES
         if tronque:
-            text = text[:MAX_FILE_BYTES] + "\n\n_(tronqué — ouvre le fichier pour la suite)_"
+            text = text[:MAX_FILE_BYTES] + "\n\n_(truncated — open the file for the rest)_"
         if len(text) > budget:
             logger.info("[%s] context.read : budget atteint, %s non injecté", spec.id, raw)
             continue
@@ -186,15 +186,15 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger,
     if missing:
         # Volontairement bruyant : un chemin mort prive le reviewer de ses conventions sans
         # que personne ne s'en aperçoive.
-        logger.warning("[%s] context.read : %d chemin(s) introuvable(s) dans le dépôt (%s) : %s",
+        logger.warning("[%s] context.read: %d path(s) not found in the repository (%s): %s",
                        spec.id, len(missing), reader.where, ", ".join(missing))
 
     if not parts:
         return ""
 
-    return ("# Conventions du dépôt reviewé (lues à la source, donc à jour)\n\n"
-            "Ce sont les règles du projet : elles PRIMENT sur tes habitudes. Ce qu'elles "
-            "n'exigent pas n'est pas un finding.\n\n" + "\n\n".join(parts))
+    return ("# Conventions of the reviewed repository (read at the source, so up to date)\n\n"
+            "These are the project's rules: they TAKE PRECEDENCE over your habits. What they "
+            "do not require is not a finding.\n\n" + "\n\n".join(parts))
 
 
 # --------------------------------------------------------------------------- lecture auto
@@ -314,12 +314,12 @@ def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging
         taille = len(body)
         tronque = taille > MAX_FILE_BYTES
         if tronque:
-            body = body[:MAX_FILE_BYTES] + "\n\n_(tronqué — ouvre le fichier pour la suite)_"
+            body = body[:MAX_FILE_BYTES] + "\n\n_(truncated — open the file for the rest)_"
         if len(body) > budget:
             logger.info("lecture auto : budget atteint, %s non injecté", rel)
             continue
         budget -= len(body)
-        portee = f" (s'applique à `{scope}/`)" if scope else ""
+        portee = f" (applies to `{scope}/`)" if scope else ""
         parts.append(f"### `{rel}`{portee}\n{body}")
         if sources is not None:
             sources.append({"path": rel, "bytes": taille, "truncated": tronque,
@@ -327,8 +327,8 @@ def build_auto_context(changed_paths: list[str], repo_path: str, logger: logging
 
     if not parts:
         return ""
-    return ("# Instructions du dépôt (lues automatiquement sur la branche de base, filtrées "
-            "sur les fichiers modifiés)\n\nRègles écrites par l'équipe pour ce dépôt : elles "
-            "PRIMENT sur tes habitudes. Chacune ne vaut que pour sa portée. Une règle ajoutée "
-            "ou modifiée par la PR n'en fait pas partie : elle n'est que dans le diff.\n\n"
+    return ("# Repository instructions (read automatically from the base branch, filtered on "
+            "the changed files)\n\nRules written by the team for this repository: they TAKE "
+            "PRECEDENCE over your habits. Each one only applies within its scope. A rule added "
+            "or changed by the PR is not part of them: it is only in the diff.\n\n"
             + "\n\n".join(parts))

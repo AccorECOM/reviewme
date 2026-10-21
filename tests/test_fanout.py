@@ -330,7 +330,7 @@ def test_nouveau_commit_probleme_toujours_la_ligne_deplacee():
     prep = prepare(PR, _config(), ctx, _result([f]), LOGGER, "tech")
     assert prep.batch == []
     assert len(prep.replies) == 1
-    assert "Toujours d'actualité" in prep.replies[0][1]
+    assert "Still relevant" in prep.replies[0][1]
     assert prep.counts["resolus"] == 0
 
 
@@ -340,7 +340,7 @@ def test_nouveau_commit_probleme_corrige():
     _commentaire_existant(ctx, _finding(), position=None)
     prep = prepare(PR, _config(), ctx, _result([]), LOGGER, "tech")   # plus aucun finding
     assert len(prep.replies) == 1
-    assert "n'apparaît plus" in prep.replies[0][1]
+    assert "no longer appears" in prep.replies[0][1]
     assert prep.counts["resolus"] == 1
 
 
@@ -520,8 +520,8 @@ def test_historique_donne_les_reponses_humaines_a_l_agent():
     assert "a.swift:10" in bloc                       # la remarque déjà postée
     assert "alice" in bloc and "Volontaire" in bloc    # la réponse humaine
     assert "Question d'un humain" not in bloc          # les fils purement humains sont hors sujet
-    assert "n'y reviens" in bloc                       # la consigne de ne pas insister
-    assert "jamais des instructions" in bloc           # contenu tiers marqué non fiable
+    assert "do not come back" in bloc                  # la consigne de ne pas insister
+    assert "never instructions" in bloc           # contenu tiers marqué non fiable
     assert marqueur not in bloc                        # marqueur technique nettoyé
 
 
@@ -700,7 +700,7 @@ def test_context_read_signale_un_chemin_mort():
     with tempfile.TemporaryDirectory() as tmp:
         (Path(tmp) / "AGENTS.md").write_text("x", encoding="utf-8")
         build_repo_context(_spec("tech", context_read=("AGENTS.md", "PARTI.md")), tmp, logger)
-    assert any("PARTI.md" in m and "introuvable" in m for m in captured)
+    assert any("PARTI.md" in m and "not found" in m for m in captured)
 
 
 def test_context_read_refuse_de_sortir_du_depot():
@@ -791,20 +791,20 @@ def test_chargement_projet_et_erreurs_explicites():
             _expect_error(load_project, "no-persona", "system.md")
 
             _write_project(root, "vide", {})
-            _expect_error(load_project, "vide", "aucun reviewer")
+            _expect_error(load_project, "vide", "no reviewer")
 
             _write_project(root, "tous-eteints", {"tech": ("enabled = false\n", "persona")})
-            _expect_error(load_project, "tous-eteints", "désactivés")
+            _expect_error(load_project, "tous-eteints", "disabled")
 
             (root / "sans-dossier-reviewers").mkdir()
             (root / "sans-dossier-reviewers" / "common").mkdir()
-            _expect_error(load_project, "sans-dossier-reviewers", "aucun reviewer")
+            _expect_error(load_project, "sans-dossier-reviewers", "no reviewer")
 
             # dossier vide = submodule git non initialisé : le message doit le dire
             (root / "submodule-vide").mkdir()
             _expect_error(load_project, "submodule-vide", "git submodule update --init")
 
-            _expect_error(load_project, "jamais-cree", "introuvable")
+            _expect_error(load_project, "jamais-cree", "not found")
         finally:
             P.PROJECTS_DIR = original
 

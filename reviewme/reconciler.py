@@ -51,7 +51,10 @@ _SEV_LABEL = {
 }
 #: Ordre de priorité quand le plafond D6 oblige à couper.
 _SEV_RANK = {Severity.BLOCKER: 0, Severity.IMPORTANT: 1, Severity.MINOR: 2}
-_SIGNATURE = "_ReviewMe · review automatisée_"
+from .strings import ALL_SIGNATURES, t  # noqa: E402  (textes postés, dans la langue du projet)
+
+#: Signature française historique, gardée pour la compatibilité des imports.
+_SIGNATURE = ALL_SIGNATURES[1]
 #: Verdicts de la passe de vérification qui écartent un finding (cf. `verify.py`).
 _VERIFY_DROP = frozenset({"refuted", "missing", "uncited", "invalid"})
 
@@ -112,26 +115,26 @@ def _guard(text: str, logger: logging.Logger, pr_number: int) -> str:
     return text
 
 
-def _comment_body(finding, marker: str, prefix: str = "") -> str:
+def _comment_body(finding, marker: str, prefix: str = "", lang: str = "en") -> str:
     label = _SEV_LABEL.get(finding.severity, "[MINOR]")
     head = f"{prefix} " if prefix else ""
     lines = [f"**{head}{label}** {_scrub(finding.message)}"]
     if finding.suggestion:
-        lines.append(f"\n_Suggestion :_ {_scrub(finding.suggestion)}")
+        lines.append(f"\n{t('suggestion', lang)} {_scrub(finding.suggestion)}")
     if getattr(finding, "preexisting", False):
-        lines.append("\n_(code déplacé par la PR : il existait déjà avant elle)_")
+        lines.append("\n" + t("moved_code_note", lang))
     if (finding.verification or {}).get("status") == "error":
         # La vérification a échoué : la remarque passe quand même, mais le lecteur le sait.
-        lines.append("\n_(non vérifiée : la passe de vérification n'a pas abouti)_")
+        lines.append("\n" + t("unverified_note", lang))
     lines.append(f"\n{marker}")
     return "\n".join(lines)
 
 
 def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
-                  title: str = "Tech Lead Review (automatisée)", *,
+                  title: str = "", *,
                   retained: list | None = None, unverified: int = 0,
                   minor: list | None = None, preexisting: list | None = None,
-                  advice: list | None = None) -> str:
+                  advice: list | None = None, lang: str = "en") -> str:
     """Corps du résumé. `retained` : findings listés (mode global, où ils n'ont pas de
     commentaire inline). `unverified` : findings écartés par la vérification.
 
@@ -139,12 +142,11 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
     vérification a écartés : la poster les ferait réapparaître par la bande. Dans ce cas,
     seuls les points retenus sont repris, en liste.
     """
-    parts = [f"## {title}"]
+    parts = [f"## {title or t('review_title', lang)}"]
     if result.summary and not unverified:
         parts.append(_scrub(result.summary))
     elif unverified:
-        parts.append(f"_{unverified} remarque(s) écartée(s) par la vérification ; seuls les "
-                     f"points confirmés sont repris ci-dessous._")
+        parts.append(t("dropped_unverified", lang, n=unverified))
     if retained:
         parts.append("")
         for f in retained:
@@ -152,31 +154,30 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
                          f"{_scrub(f.message)}")
     if advice:
         # Pas des défauts : ce qu'un humain doit valider lui-même sur CETTE PR.
-        parts.append("\n**💡 Conseil pour la relecture** (à valider par un humain) :")
+        parts.append("\n" + t("advice_header", lang))
         for a in advice:
             ou = ", ".join(f"`{_scrub(p)}`" for p in a.paths)
             parts.append(f"- **{_scrub(a.topic)}** — {_scrub(a.why)}" + (f" ({ou})" if ou else ""))
     if minor:
-        parts.append("\n**Remarques mineures** :")
+        parts.append("\n" + t("minor_header", lang))
         for f in minor:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_scrub(f.message)}")
     if preexisting:
-        parts.append("\n**Code préexistant** (déplacé ou copié par la PR, pas introduit par "
-                     "elle) :")
+        parts.append("\n" + t("moved_header", lang))
         for f in preexisting:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} "
                          f"{_scrub(f.message)}")
     if out_of_diff:
-        parts.append("\n**Remarques hors-diff** (lignes non modifiées par la PR) :")
+        parts.append("\n" + t("out_of_diff_header", lang))
         for f in out_of_diff:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} {_scrub(f.message)}")
-    parts.append(f"\n---\n{_SIGNATURE} · commit `{head_sha[:8]}`")
+    parts.append(f"\n---\n{t('signature', lang)} · commit `{head_sha[:8]}`")
     return "\n".join(parts)
 
 
-def _degraded_body(summary_body: str, batch: list) -> str:
+def _degraded_body(summary_body: str, batch: list, lang: str = "en") -> str:
     """Repli : l'inline a échoué (422 résiduel) -> tout en un commentaire global."""
-    parts = [summary_body, "\n**Commentaires (inline indisponible)** :"]
+    parts = [summary_body, "\n" + t("degraded_header", lang)]
     for c in batch:
         body = _MARKER_RE.sub("", c["body"]).strip()
         parts.append(f"- `{_scrub(c['path'])}:{c['line']}` — {body}")
@@ -234,20 +235,23 @@ class PreparedReview:
     threads_resolus: set = field(default_factory=set)   # évite de répondre deux fois
     counts: dict = field(default_factory=dict)
     findings: list = field(default_factory=list)        # tous les findings, avec leur `fate`
+    language: str = "en"                                # langue des textes postés
 
 
 def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             logger: logging.Logger, reviewer_id: str, *,
             output_mode: str = "inline", prefix: str = "",
-            silent_when_clean: bool = False, advice: bool = False) -> PreparedReview:
+            silent_when_clean: bool = False, advice: bool = False,
+            language: str = "en") -> PreparedReview:
     """Calcule ce qu'il faudrait poster pour UN reviewer. Sans effet de bord réseau."""
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]
     counts = {"posted": 0, "replied": 0, "deduped": 0, "out_of_diff": 0,
               "invalid": 0, "dropped_low": 0, "dropped_unverified": 0, "capped": 0,
               "resolus": 0, "fallback": False}
+    lang = language
     prep = PreparedReview(reviewer_id=reviewer_id, output_mode=output_mode, counts=counts,
-                          findings=list(result.findings))
+                          findings=list(result.findings), language=lang)
 
     # --- Repli : JSON inexploitable -> commentaire global ---
     if not result.parsed_ok:
@@ -255,8 +259,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
                        pr_number, reviewer_id)
         counts["fallback"] = True
         prep.global_body = _guard(
-            f"## Review automatisée ({reviewer_id})\n\n{_scrub(result.raw)}\n\n"
-            f"---\n{_SIGNATURE} · commit `{head_sha[:8]}`", logger, pr_number)
+            f"## {t('fallback_title', lang, reviewer=reviewer_id)}\n\n{_scrub(result.raw)}\n\n"
+            f"---\n{t('signature', lang)} · commit `{head_sha[:8]}`", logger, pr_number)
         return prep
 
     # --- Validation contre le diff (anti-422) ---
@@ -328,12 +332,13 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
                 conseils.append(a)
     counts["advice"] = len(conseils)
 
-    title = f"Review automatisée — {reviewer_id}" if prefix else "Tech Lead Review (automatisée)"
+    title = (t("review_title_reviewer", lang, reviewer=reviewer_id) if prefix
+             else t("review_title", lang))
     prep.summary = _guard(_summary_body(
         result, out_of_diff, head_sha, title,
         retained=inline if output_mode == "global" else None,
         unverified=counts["dropped_unverified"], minor=minor, preexisting=preexisting,
-        advice=conseils),
+        advice=conseils, lang=lang),
         logger, pr_number)
 
     # --- Mode `global` : un unique commentaire, mis à jour de commit en commit ---
@@ -364,7 +369,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             f.fate = "posted"
             prep.batch.append({
                 "path": f.path, "line": f.line, "side": "RIGHT",
-                "body": _guard(_comment_body(f, marker, prefix), logger, pr_number),
+                "body": _guard(_comment_body(f, marker, prefix, lang), logger, pr_number),
                 "_severity": f.severity, "_confidence": f.confidence, "_reviewer": reviewer_id,
                 "_finding": f,
             })
@@ -374,8 +379,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         if existing.get("position") is None:
             # finding toujours là mais commentaire devenu outdated -> répondre dans le thread
             prep.replies.append((existing["id"],
-                                 f"Toujours d'actualité sur `{head_sha[:8]}` "
-                                 f"(le code de cette ligne a évolué). {_SIGNATURE}"))
+                                 t("still_relevant", lang, sha=head_sha[:8],
+                                   signature=t("signature", lang))))
         else:
             counts["deduped"] += 1
 
@@ -397,8 +402,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             continue
         prep.threads_resolus.add(commentaire["id"])
         prep.replies.append((commentaire["id"],
-                             f"Ce point n'apparaît plus sur `{head_sha[:8]}` — corrigé "
-                             f"ou disparu du diff. {_SIGNATURE}"))
+                             t("gone", lang, sha=head_sha[:8], signature=t("signature", lang))))
         counts["resolus"] = counts.get("resolus", 0) + 1
 
     if counts["dropped_low"]:
@@ -514,7 +518,8 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
         except GitHubApiError as e:
             if e.status_code == 422:
                 logger.warning("PR #%s : 422 sur le batch review, repli commentaire global", pr_number)
-                repli = gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch),
+                repli = gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch,
+                                                                               prepared[0].language),
                                                                 logger, pr_number))
                 for c in batch:
                     if c.get("_finding") is not None:

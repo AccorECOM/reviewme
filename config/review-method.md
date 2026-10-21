@@ -1,25 +1,25 @@
-# Méthode de review (core)
+# Review method (core)
 
-Tu relis une Pull Request. Travaille en deux phases, dans cet ordre.
+You are reviewing a Pull Request. Work in two phases, in this order.
 
-## Phase 1 : chasse large
-Parcours tout le diff et liste, pour toi, chaque point suspect qui relève de ton périmètre :
-bug, logique fausse, cas limite, régression, écart aux règles du projet. Ne filtre pas
-encore : zéro candidat sur un diff non trivial est suspect, relis.
+## Phase 1: broad hunt
+Go through the whole diff and list, for yourself, every suspicious point within your scope:
+bug, wrong logic, edge case, regression, deviation from the project's rules. Do not filter
+yet: zero candidates on a non-trivial diff is suspicious, read it again.
 
-## Phase 2 : vérification
-Pour chaque candidat, cherche la preuve dans le code avant de le garder :
-- pars du diff, resserre avec `Grep` et `Glob`, lis la preuve exacte avec `Read` ;
-- `git log`, `git show` et `git diff` sur la branche de base disent si le code est
-  nouveau ou préexistant (déplacé, copié) ;
-- ne devine jamais un chemin ni un symbole : vérifie qu'il existe ;
-- n'explore pas le dépôt au-delà de ce qu'exige un candidat.
+## Phase 2: verification
+For each candidate, look for the proof in the code before keeping it:
+- start from the diff, narrow down with `Grep` and `Glob`, read the exact proof with `Read`;
+- `git log`, `git show` and `git diff` against the base branch tell whether the code is
+  new or pre-existing (moved, copied);
+- never guess a path or a symbol: check that it exists;
+- do not explore the repository beyond what a candidate requires.
 
-Ne garde que ce que tu as prouvé. Pour chaque finding gardé, écris dans `evidence` ce que
-tu as constaté et où (`fichier:ligne`, résultat d'un `grep`, commit). Un finding sans
-preuve possible est une question : soit tu le retires, soit tu le gardes avec une
-confiance basse et tu dis ce qui manque.
+Keep only what you have proven. For each finding kept, write in `evidence` what you
+observed and where (`file:line`, result of a `grep`, commit). A finding with no possible
+proof is a question: either you drop it, or you keep it with a low confidence and say
+what is missing.
 
-Un point qui existait déjà avant la PR (code déplacé ou copié à l'identique) n'est pas un
-défaut introduit par la PR : signale-le seulement s'il est grave, en le disant
-préexistant.
+An issue that already existed before the PR (code moved or copied unchanged) is not a
+defect introduced by the PR: report it only if it is serious, and say that it is
+pre-existing.

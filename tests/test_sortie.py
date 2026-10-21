@@ -49,8 +49,8 @@ def test_mineures_et_preexistantes_dans_le_resume():
     assert [c["line"] for c in prep.batch] == [10]
     assert [(f.fate, f.in_summary) for f in fs] == [("posted", False), ("posted", True),
                                                     ("posted", True)]
-    assert "Remarques mineures" in prep.summary and "m11" in prep.summary
-    assert "Code préexistant" in prep.summary and "m12" in prep.summary
+    assert "Minor findings" in prep.summary and "m11" in prep.summary
+    assert "Pre-existing code" in prep.summary and "m12" in prep.summary
 
 
 def test_seuil_inline_configurable():
@@ -141,7 +141,7 @@ def test_blocker_deplace_reste_en_ligne():
     fs = [_f(10, Severity.BLOCKER, preexisting=True), _f(11, Severity.IMPORTANT, preexisting=True)]
     prep = prepare(PR, _config(), _ctx(), ReviewResult("COMMENT", "s", fs), LOGGER, "tech")
     assert [c["line"] for c in prep.batch] == [10]
-    assert "code déplacé" in prep.batch[0]["body"] and "m11" in prep.summary
+    assert "code moved by this PR" in prep.batch[0]["body"] and "m11" in prep.summary
 
 
 def test_mineure_deja_en_ligne_pas_en_double():

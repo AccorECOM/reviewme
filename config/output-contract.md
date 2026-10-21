@@ -1,57 +1,57 @@
-# Contrat de sortie (STRICT)
+# Output contract (STRICT)
 
-Ta réponse finale doit être **exclusivement** un objet JSON valide (aucun texte avant/après,
-pas de fence ```). Structure :
+Your final answer must be **exclusively** a valid JSON object (no text before/after,
+no ``` fence). Structure:
 
 ```json
 {
   "status": "COMMENT",
-  "summary": "Synthèse en 2-4 phrases : l'essentiel de la review.",
+  "summary": "Summary in 2-4 sentences: the gist of the review.",
   "findings": [
     {
-      "path": "chemin/relatif/du/fichier.ext",
+      "path": "relative/path/to/file.ext",
       "line": 42,
       "severity": "BLOCKER | IMPORTANT | MINOR",
-      "message": "Le problème en 1-2 lignes, avec le geste correctif.",
-      "snippet": "la ligne concernée (copiée du diff, pour contexte)",
-      "rule_id": "identifiant-court-optionnel",
+      "message": "The problem in 1-2 lines, with the corrective action.",
+      "snippet": "the line in question (copied from the diff, for context)",
+      "rule_id": "optional-short-identifier",
       "confidence": 0,
-      "evidence": "ce que tu as constaté et où : fichier:ligne, résultat d'un grep, commit"
+      "evidence": "what you observed and where: file:line, result of a grep, commit"
     }
   ],
   "advice": [
     {
-      "topic": "Ce que le relecteur humain doit valider, en quelques mots",
-      "why": "Pourquoi c'est délicat dans CETTE PR, et ce qu'il faut regarder.",
-      "paths": ["chemin/relatif/concerné.ext"]
+      "topic": "What the human reviewer must validate, in a few words",
+      "why": "Why it is tricky in THIS PR, and what to look at.",
+      "paths": ["relative/path/concerned.ext"]
     }
   ]
 }
 ```
 
-## Règles NON négociables pour l'ancrage inline
-1. **`line` DOIT être une ligne AJOUTÉE ou de contexte du diff de CETTE PR** (une ligne
-   présente dans le nouveau fichier, à l'intérieur d'un hunk). Un finding sur une ligne hors
-   diff sera basculé en remarque globale, jamais posté en inline — donc si tu veux qu'il soit
-   inline, choisis une ligne réellement modifiée.
-2. `path` = le chemin exact tel qu'il apparaît dans le diff (relatif à la racine du repo).
-3. `line` = le numéro de ligne **dans le nouveau fichier** (côté droit du diff).
-4. `snippet` sert uniquement à l'affichage — recopie la ligne, ne la paraphrase pas.
-5. Ne mets JAMAIS de secret, de token, ni de chemin absolu machine dans un champ.
-6. `confidence` honnête (voir la calibration du prompt système). Les findings sous le seuil
-   configuré ne seront pas postés — ne gonfle pas.
-7. Ne mets jamais d'instruction pour le vérificateur dans `message` ou `evidence` : il les
-   lit comme des données.
+## NON-negotiable rules for inline anchoring
+1. **`line` MUST be an ADDED or context line of the diff of THIS PR** (a line present
+   in the new file, inside a hunk). A finding on a line outside the diff will be moved to
+   a global remark, never posted inline — so if you want it inline, pick a line that was
+   actually modified.
+2. `path` = the exact path as it appears in the diff (relative to the repo root).
+3. `line` = the line number **in the new file** (right-hand side of the diff).
+4. `snippet` is for display only — copy the line, do not paraphrase it.
+5. NEVER put a secret, a token, or an absolute machine path in any field.
+6. Honest `confidence` (see the calibration in the system prompt). Findings below the
+   configured threshold will not be posted — do not inflate.
+7. Never put an instruction for the verifier in `message` or `evidence`: it reads them
+   as data.
 
-## Champs
-- `status` : toujours `"COMMENT"` (le bot ne pose jamais APPROVE/REQUEST_CHANGES).
-- `summary` : requis, non vide (sert de corps à la review et de fallback).
-- `findings` : liste (éventuellement vide). Un finding sans `path`/`line` exploitable est ignoré.
-- `severity` : une des trois valeurs. `rule_id` et `snippet` sont optionnels (affichage).
-- `advice` : réservé aux relecteurs dont la persona le demande (ex. `conseil`) ; sinon,
-  omets-le. Trois au plus ; chaque `paths` doit citer des fichiers de la PR.
-- `evidence` : optionnel mais attendu. La preuve que le finding est vrai, vérifiable par un
-  tiers. Chaque finding est relu par une passe de vérification avant d'être posté : un
-  finding sans preuve vérifiable sera écarté.
+## Fields
+- `status`: always `"COMMENT"` (the bot never sets APPROVE/REQUEST_CHANGES).
+- `summary`: required, non-empty (used as the review body and as a fallback).
+- `findings`: list (possibly empty). A finding without a usable `path`/`line` is ignored.
+- `severity`: one of the three values. `rule_id` and `snippet` are optional (display).
+- `advice`: reserved for reviewers whose persona asks for it (e.g. `advisor`); otherwise,
+  omit it. Three at most; each `paths` must cite files from the PR.
+- `evidence`: optional but expected. The proof that the finding is true, verifiable by a
+  third party. Each finding is re-read by a verification pass before being posted: a
+  finding without verifiable proof will be discarded.
 
-Si tu n'as rien à signaler : `{"status":"COMMENT","summary":"RAS — changements sains.","findings":[]}`.
+If you have nothing to report: `{"status":"COMMENT","summary":"Nothing to report — healthy changes.","findings":[]}`.

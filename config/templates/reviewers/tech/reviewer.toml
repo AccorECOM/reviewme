@@ -1,21 +1,21 @@
-# Reviewer technique : architecture, sécurité, performance, fiabilité, conventions.
-output_mode = "inline"     # findings ancrés sur les lignes du diff
-priority = 10              # passe en premier (le plus utile si le budget vient à manquer)
-# model = "claude-opus-4-8"  # modèle de CE reviewer ; vide = CLAUDE_MODEL, sinon défaut CLI
-# when.paths absent = se déclenche sur toute PR
+# Technical reviewer: architecture, security, performance, reliability, conventions.
+output_mode = "inline"     # findings anchored on the diff lines
+priority = 10              # runs first (the most useful one if the budget runs out)
+# model = "claude-opus-4-8"  # model for THIS reviewer; empty = CLAUDE_MODEL, otherwise CLI default
+# when.paths absent = triggers on every PR
 
-# enabled = false        # met ce reviewer en sommeil sans supprimer son dossier
-# max_turns = 30         # tours de la review ; à monter pour un reviewer au périmètre large
+# enabled = false        # puts this reviewer to sleep without deleting its folder
+# max_turns = 30         # review turns; raise it for a reviewer with a broad scope
 
-# [verification]         # passe de vérification des findings (activée par défaut)
+# [verification]         # findings verification pass (enabled by default)
 # enabled = true
-# model = ""             # vide = le modèle du reviewer
+# model = ""             # empty = the reviewer's model
 # max_turns = 15
 
 [context]
-# Conventions du projet, LUES DANS LE DÉPÔT reviewé à chaque review (jamais recopiées ici :
-# une copie diverge du repo dès la première évolution). Fichier -> contenu injecté ;
-# dossier -> inventaire de ses .md. Un chemin introuvable est signalé en WARNING.
+# Project conventions, READ FROM THE REVIEWED REPOSITORY at each review (never copied here:
+# a copy drifts from the repo at the first change). File -> injected content;
+# folder -> inventory of its .md files. A path that cannot be found is reported as a WARNING.
 read = [
   "AGENTS.md",
   "CONTRIBUTING.md",
@@ -23,9 +23,9 @@ read = [
 ]
 
 # [plugins]
-# Skills et agents dont ce reviewer a besoin, installés avant la review (idempotent).
-# ⚠️ Un plugin est du CODE TIERS qui tourne aux côtés des secrets du job : le relire comme
-# du code. Le core garde son allowlist d'outils — un skill de plugin n'obtient pas plus de
-# droits que le reviewer.
+# Skills and agents this reviewer needs, installed before the review (idempotent).
+# ⚠️ A plugin is THIRD-PARTY CODE running alongside the job's secrets: review it like
+# code. The core keeps its tool allowlist — a plugin skill gets no more rights than the
+# reviewer.
 # marketplaces = ["owner/marketplace-repo"]
-# install      = ["mon-plugin"]            # ou "mon-plugin@marketplace"
+# install      = ["my-plugin"]             # or "my-plugin@marketplace"

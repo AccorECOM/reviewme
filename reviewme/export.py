@@ -4,7 +4,7 @@
   `enrich.jsonl`, `prs.jsonl` (filtrés sur la fenêtre), `config-snapshot/`, `stats.json`,
   `quality.json` (le bloc qualité déjà calculé) et `SCHEMA.md`, qui décrit chaque champ.
   C'est ce qu'on donne à une analyse pour juger les réglages.
-- **Humain** : `rapport-semaine.md`, lisible tel quel dans GitHub ou Slack — les stats
+- **Humain** : `weekly-report.md`, lisible tel quel dans GitHub ou Slack — les stats
   classiques, puis des stats « fun » qui entretiennent la boucle 👍/👎.
 
 Le rapport ne nomme JAMAIS un développeur à propos d'une remarque négative : les seuls
@@ -27,7 +27,8 @@ from .ledger import FINDINGS_FILE, RUNS_FILE, SNAPSHOT_DIR, read_all
 from .quality import compute, latest
 from .stats import STATS_FILE
 
-SCHEMA_DOC = ROOT_DIR / "docs" / "registre-schema.md"
+SCHEMA_DOC = ROOT_DIR / "docs" / "ledger-schema.md"
+REPORT_FILE = "weekly-report.md"
 
 
 _LOGIN_KEYS = ("user", "author", "resolved_by")
@@ -74,7 +75,74 @@ def quality_of(data: dict[str, list[dict]]) -> dict:
 
 # --------------------------------------------------------------------------- rapport
 
-def report(data: dict[str, list[dict]], q: dict, repo: str = "", since_label: str = "") -> str:
+#: Textes du rapport humain, dans la langue du projet (`[review] language`).
+_R = {
+    "en": {
+        "title": "# ReviewMe — report{since}", "classic": "## Usual stats",
+        "prs": "- **PRs reviewed**: {prs} ({runs} reviewer runs)",
+        "posted": "- **Findings posted**: {n} — acted upon {followed}, 👍 {up}, 👎 {down}, "
+                  "contested {contested}",
+        "cost": "- **Cost**: {total:.2f} $ in total, {per_pr:.2f} $ per PR",
+        "duration": "- **Average duration** of a PR: {s:.0f} s",
+        "t_reviewer": "| Reviewer | Posted | Acted upon | Approved | Contested |",
+        "t_severity": "| Severity | Posted | Acted upon |",
+        "calibration": "**Calibration** (every finding, posted or not):",
+        "t_calib": "| Confidence | Findings | Posted | Dropped below threshold | Acted upon |",
+        "misses": "**Approximate misses**: {silent} human comment(s) where the bot said "
+                  "nothing, {dropped} where it had a dropped finding (out of {total} human "
+                  "comments).",
+        "baseline": "**Baseline vs live** (same PRs, same commits):",
+        "baseline_row": "- {rid}: baseline {b}, live {l}, common {both} (over {prs} PRs)",
+        "rules": "**Rules to review** (≥ 3 contestations):",
+        "rule_row": "- `{rule}`: {c} contestation(s) out of {p} finding(s)",
+        "fun": "## Fun stats",
+        "best_rule": "- 🏅 **Most approved rule**: `{rule}` ({n} approval(s))",
+        "worst_rule": "- 🤔 **Most contested rule**: `{rule}` ({n} contestation(s))",
+        "useful": "- 🎯 **Most useful reviewer**: {rid} ({pct} of findings acted upon)",
+        "busiest": "- 🏋️ **PR that kept the bot busiest**: #{pr} ({turns} turns, {cost:.2f} $)",
+        "biggest": "- 📏 **Biggest diff reviewed**: #{pr} ({lines} lines)",
+        "save": "- 🛟 **Save of the week**: a BLOCKER from {rid} acted upon — {link}",
+        "loop": "- 🙌 **Keeping the 👍/👎 loop alive**: {top}",
+        "avoided": "- ✋ **Findings handled without a human having to write them**: {n}",
+        "empty": "- Not enough feedback yet for fun stats.",
+    },
+    "fr": {
+        "title": "# ReviewMe — rapport{since}", "classic": "## Stats classiques",
+        "prs": "- **PR relues** : {prs} ({runs} passages de relecteur)",
+        "posted": "- **Remarques postées** : {n} — suivies d'effet {followed}, 👍 {up}, "
+                  "👎 {down}, contestées {contested}",
+        "cost": "- **Coût** : {total:.2f} $ au total, {per_pr:.2f} $ par PR",
+        "duration": "- **Durée moyenne** d'une PR : {s:.0f} s",
+        "t_reviewer": "| Relecteur | Postées | Suivies d'effet | Approuvées | Contestées |",
+        "t_severity": "| Sévérité | Postées | Suivies d'effet |",
+        "calibration": "**Calibration** (tous les findings, postés ou non) :",
+        "t_calib": "| Confiance | Findings | Postés | Écartés sous le seuil | Suivies d'effet |",
+        "misses": "**Manqués approchés** : {silent} commentaire(s) humain(s) là où le bot n'a "
+                  "rien dit, {dropped} là où il avait un finding écarté (sur {total} "
+                  "commentaires humains).",
+        "baseline": "**Témoin contre live** (mêmes PR, mêmes commits) :",
+        "baseline_row": "- {rid} : témoin {b}, live {l}, communes {both} (sur {prs} PR)",
+        "rules": "**Règles à revoir** (≥ 3 contestations) :",
+        "rule_row": "- `{rule}` : {c} contestation(s) sur {p} remarque(s)",
+        "fun": "## Stats fun",
+        "best_rule": "- 🏅 **Règle la plus approuvée** : `{rule}` ({n} approbation(s))",
+        "worst_rule": "- 🤔 **Règle la plus contestée** : `{rule}` ({n} contestation(s))",
+        "useful": "- 🎯 **Relecteur le plus utile** : {rid} ({pct} de remarques suivies "
+                  "d'effet)",
+        "busiest": "- 🏋️ **PR qui a fait le plus travailler le bot** : #{pr} ({turns} tours, "
+                   "{cost:.2f} $)",
+        "biggest": "- 📏 **Plus gros diff relu** : #{pr} ({lines} lignes)",
+        "save": "- 🛟 **Sauvetage de la semaine** : un BLOCKER de {rid} suivi d'effet — {link}",
+        "loop": "- 🙌 **Ils font vivre la boucle 👍/👎** : {top}",
+        "avoided": "- ✋ **Remarques traitées sans qu'un humain ait eu à les écrire** : {n}",
+        "empty": "- Pas encore assez de retours pour des stats fun.",
+    },
+}
+
+
+def report(data: dict[str, list[dict]], q: dict, repo: str = "", since_label: str = "",
+           language: str = "en") -> str:
+    R = _R.get(language, _R["en"])
     findings, runs, enrich = data[FINDINGS_FILE], data[RUNS_FILE], data[ENRICH_FILE]
     live_runs = [r for r in runs if r.get("variant", "live") == "live"]
     prs = {r.get("pr") for r in live_runs}
@@ -85,87 +153,76 @@ def report(data: dict[str, list[dict]], q: dict, repo: str = "", since_label: st
     reactions = Counter(r.get("content") for e in latest(enrich, "comment_id").values()
                         for r in e.get("reactions", []))
 
-    L = [f"# ReviewMe — rapport{(' ' + since_label) if since_label else ''}", ""]
-    L += ["## Stats classiques", "",
-          f"- **PR relues** : {len(prs)} ({len(live_runs)} passages de relecteur)",
-          f"- **Remarques postées** : {len(judged)} — suivies d'effet "
-          f"{sum(j['followed'] for j in judged)}, 👍 {reactions['+1']}, 👎 {reactions['-1']}, "
-          f"contestées {sum(j['contested'] for j in judged)}",
-          f"- **Coût** : {cost:.2f} $ au total, "
-          f"{(cost / len(prs)) if prs else 0:.2f} $ par PR",
-          f"- **Durée moyenne** d'une PR : {(sum(durees) / len(durees)) if durees else 0:.0f} s",
+    L = [R["title"].format(since=(" " + since_label) if since_label else ""), ""]
+    L += [R["classic"], "",
+          R["prs"].format(prs=len(prs), runs=len(live_runs)),
+          R["posted"].format(n=len(judged), followed=sum(j["followed"] for j in judged),
+                             up=reactions["+1"], down=reactions["-1"],
+                             contested=sum(j["contested"] for j in judged)),
+          R["cost"].format(total=cost, per_pr=(cost / len(prs)) if prs else 0),
+          R["duration"].format(s=(sum(durees) / len(durees)) if durees else 0),
           ""]
 
-    L += ["| Relecteur | Postées | Suivies d'effet | Approuvées | Contestées |",
-          "|---|---:|---:|---:|---:|"]
+    L += [R["t_reviewer"], "|---|---:|---:|---:|---:|"]
     for rid, t in q["by_reviewer"].items():
         L.append(f"| {rid} | {t['posted']} | {t['followed']} ({_pct(t['followed_rate'])}) | "
                  f"{t['approved']} | {t['contested']} |")
-    L += ["", "| Sévérité | Postées | Suivies d'effet |", "|---|---:|---:|"]
+    L += ["", R["t_severity"], "|---|---:|---:|"]
     for sev, t in q["by_severity"].items():
         L.append(f"| {sev} | {t['posted']} | {t['followed']} ({_pct(t['followed_rate'])}) |")
 
-    L += ["", "**Calibration** (tous les findings, postés ou non) :", "",
-          "| Confiance | Findings | Postés | Écartés sous le seuil | Suivies d'effet |",
-          "|---|---:|---:|---:|---:|"]
+    L += ["", R["calibration"], "", R["t_calib"], "|---|---:|---:|---:|---:|"]
     for b, c in q["calibration"].items():
         L.append(f"| {b} | {c['findings']} | {c['fates'].get('posted', 0)} | "
                  f"{c['fates'].get('dropped_low', 0)} | {c['followed']} |")
 
     m = q["misses"]
-    L += ["", f"**Manqués approchés** : {m['on_silent_lines']} commentaire(s) humain(s) là où "
-          f"le bot n'a rien dit, {m['on_dropped_findings']} là où il avait un finding écarté "
-          f"(sur {m['human_comments']} commentaires humains)."]
+    L += ["", R["misses"].format(silent=m["on_silent_lines"], dropped=m["on_dropped_findings"],
+                                 total=m["human_comments"])]
 
     if q["baseline_vs_live"]:
-        L += ["", "**Témoin contre live** (mêmes PR, mêmes commits) :", ""]
+        L += ["", R["baseline"], ""]
         for rid, v in sorted(q["baseline_vs_live"].items()):
-            L.append(f"- {rid} : témoin {v['baseline']}, live {v['live']}, communes "
-                     f"{v['both']} (sur {v['prs']} PR)")
+            L.append(R["baseline_row"].format(rid=rid, b=v["baseline"], l=v["live"],
+                                              both=v["both"], prs=v["prs"]))
 
     if q["contested_rules"]:
-        L += ["", "**Règles à revoir** (≥ 3 contestations) :", ""]
-        L += [f"- `{r['rule']}` : {r['contested']} contestation(s) sur {r['posted']} remarque(s)"
+        L += ["", R["rules"], ""]
+        L += [R["rule_row"].format(rule=r["rule"], c=r["contested"], p=r["posted"])
               for r in q["contested_rules"]]
 
-    L += ["", "## Stats fun", ""]
-    L += _fun(q, runs, enrich, findings, repo)
+    L += ["", R["fun"], ""]
+    L += _fun(q, runs, enrich, findings, repo, R)
     return "\n".join(L) + "\n"
 
 
 def _fun(q: dict, runs: list[dict], enrich: list[dict], findings: list[dict],
-         repo: str) -> list[str]:
+         repo: str, R: dict) -> list[str]:
     out = []
     rules = [(k, v) for k, v in q["by_rule"].items() if v["posted"]]
     if rules:
         best = max(rules, key=lambda kv: (kv[1]["approved"], kv[1]["followed"]))
         if best[1]["approved"]:
-            out.append(f"- 🏅 **Règle la plus approuvée** : `{best[0]}` "
-                       f"({best[1]['approved']} approbation(s))")
+            out.append(R["best_rule"].format(rule=best[0], n=best[1]["approved"]))
         worst = max(rules, key=lambda kv: kv[1]["contested"])
         if worst[1]["contested"]:
-            out.append(f"- 🤔 **Règle la plus contestée** : `{worst[0]}` "
-                       f"({worst[1]['contested']} contestation(s))")
+            out.append(R["worst_rule"].format(rule=worst[0], n=worst[1]["contested"]))
     useful = [(k, v) for k, v in q["by_reviewer"].items() if v["posted"] >= 3]
     if useful:
         k, v = max(useful, key=lambda kv: kv[1]["followed_rate"] or 0)
-        out.append(f"- 🎯 **Relecteur le plus utile** : {k} "
-                   f"({_pct(v['followed_rate'])} de remarques suivies d'effet)")
+        out.append(R["useful"].format(rid=k, pct=_pct(v["followed_rate"])))
     live = {k: v for k, v in q["cost_by_pr"].items() if k.startswith("live:")}
     if live:
         k, v = max(live.items(), key=lambda kv: (kv[1]["turns"], kv[1]["cost_usd"]))
-        out.append(f"- 🏋️ **PR qui a fait le plus travailler le bot** : #{k.split(':')[1]} "
-                   f"({v['turns']} tours, {v['cost_usd']:.2f} $)")
+        out.append(R["busiest"].format(pr=k.split(":")[1], turns=v["turns"], cost=v["cost_usd"]))
         k, v = max(live.items(), key=lambda kv: kv[1]["diff_lines"])
-        out.append(f"- 📏 **Plus gros diff relu** : #{k.split(':')[1]} "
-                   f"({v['diff_lines']} lignes)")
+        out.append(R["biggest"].format(pr=k.split(":")[1], lines=v["diff_lines"]))
     saves = [j for j in q["_judged"] if j.get("severity") == "BLOCKER" and j["followed"]]
     if saves:
         s = saves[0]
         lien = (f"https://github.com/{repo}/pull/{s['pr']}#discussion_r{s['comment_id']}"
                 if repo else f"PR #{s['pr']}")
-        out.append(f"- 🛟 **Sauvetage de la semaine** : un BLOCKER de {s.get('reviewer')} "
-                   f"suivi d'effet — {lien}")
+        out.append(R["save"].format(rid=s.get("reviewer"), link=lien))
     # Participation uniquement : jamais de classement sur le contenu des réponses.
     actifs = Counter()
     for e in latest(enrich, "comment_id").values():
@@ -175,25 +232,24 @@ def _fun(q: dict, runs: list[dict], enrich: list[dict], findings: list[dict],
             actifs[r.get("user")] += 1
     actifs.pop("", None)
     if actifs:
-        top = ", ".join(f"{u} ({n})" for u, n in actifs.most_common(3))
-        out.append(f"- 🙌 **Ils font vivre la boucle 👍/👎** : {top}")
+        out.append(R["loop"].format(top=", ".join(f"{u} ({n})" for u, n in actifs.most_common(3))))
     evites = sum(1 for j in q["_judged"] if j["followed"]
                  and not (latest(enrich, "comment_id").get(j["comment_id"]) or {})
                  .get("human_comments_nearby"))
     if evites:
-        out.append(f"- ✋ **Remarques traitées sans qu'un humain ait eu à les écrire** : "
-                   f"{evites}")
-    return out or ["- Pas encore assez de retours pour des stats fun."]
+        out.append(R["avoided"].format(n=evites))
+    return out or [R["empty"]]
 
 
 # --------------------------------------------------------------------------- archive
 
 def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
-           since_label: str = "", stats_file: Path | None = None) -> tuple[Path, Path]:
+           since_label: str = "", stats_file: Path | None = None,
+           language: str = "en") -> tuple[Path, Path]:
     """Écrit l'archive machine et le rapport humain. Renvoie (archive, rapport)."""
     data = load(root, since)
     q = quality_of(data)
-    rapport = report(data, q, repo, since_label)
+    rapport = report(data, q, repo, since_label, language)
     out_dir.mkdir(parents=True, exist_ok=True)
     date = datetime.now(UTC).strftime("%Y-%m-%d")
 
@@ -217,12 +273,12 @@ def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
                                               encoding="utf-8")
         if SCHEMA_DOC.is_file():
             shutil.copy(SCHEMA_DOC, staging / "SCHEMA.md")
-        (staging / "rapport-semaine.md").write_text(rapport, encoding="utf-8")
+        (staging / REPORT_FILE).write_text(rapport, encoding="utf-8")
 
         archive = out_dir / f"reviewme-artifact-{date}.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
             tar.add(staging, arcname=staging.name)
 
-    rapport_path = out_dir / "rapport-semaine.md"
+    rapport_path = out_dir / REPORT_FILE
     rapport_path.write_text(rapport, encoding="utf-8")
     return archive, rapport_path

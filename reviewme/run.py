@@ -103,7 +103,7 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
         if facts:
             extra = f"{extra}\n\n{facts}" if extra else facts
             sources.append({"path": spec.precheck, "bytes": len(facts),
-                            "truncated": "_(sortie tronquée)_" in facts, "source": "precheck"})
+                            "truncated": "_(output truncated)_" in facts, "source": "precheck"})
 
     result = run_reviewer(pr_number, title, diff, config, spec=spec, extra_context=extra)
     result.metadata["context_files"] = sources
@@ -208,31 +208,31 @@ def config_from_base(config: Config, base_ref: str | None, workdir: str,
         return config                       # dépôt de config externe : déjà hors de la PR
     rel = Path(os.path.relpath(cible, repo)).as_posix()
     if not base_ref:
-        raise ProjectConfigError("branche de base inconnue : impossible de lire la config "
-                                 "hors de la PR")
+        raise ProjectConfigError("unknown base branch: cannot read the config "
+                                 "outside the PR")
     if not trusted_base(base_ref, default_branch):
         raise ProjectConfigError(
-            f"branche de base '{base_ref}' non reconnue comme source de config (branche par "
-            f"défaut ou REVIEWME_TRUSTED_BASES) : la PR n'est pas relue")
+            f"base branch '{base_ref}' is not a trusted config source (default branch "
+            f"or REVIEWME_TRUSTED_BASES): the PR is not reviewed")
     try:
         out = subprocess.run(["git", "archive", "--format=tar", f"origin/{base_ref}", "--", rel],
                              cwd=repo, capture_output=True, timeout=60, check=False)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise ProjectConfigError(f"lecture de la config sur origin/{base_ref} impossible "
+        raise ProjectConfigError(f"cannot read the config from origin/{base_ref} "
                                  f"({type(e).__name__})") from e
     if out.returncode != 0:
         raise ProjectConfigError(
-            f"`{rel}` introuvable sur origin/{base_ref} : la config d'une PR ne s'applique "
-            f"qu'une fois mergée ({out.stderr.decode(errors='replace').strip()[:200]})")
+            f"`{rel}` not found on origin/{base_ref}: a PR's config only applies once "
+            f"merged ({out.stderr.decode(errors='replace').strip()[:200]})")
     try:
         with tarfile.open(fileobj=io.BytesIO(out.stdout)) as tar:
             tar.extractall(workdir, filter="data")
     except (tarfile.TarError, OSError) as e:
-        raise ProjectConfigError(f"archive de la config sur origin/{base_ref} refusée "
+        raise ProjectConfigError(f"config archive from origin/{base_ref} rejected "
                                  f"({type(e).__name__})") from e
     if not (Path(workdir) / rel).is_dir():
-        raise ProjectConfigError(f"`{rel}` vide dans l'archive de origin/{base_ref} "
-                                 f"(export-ignore ?)")
+        raise ProjectConfigError(f"`{rel}` empty in the archive of origin/{base_ref} "
+                                 f"(export-ignore?)")
     logger.info("Config lue sur origin/%s (`%s`), pas sur la PR", base_ref, rel)
     return dataclasses.replace(config, config_home=str(Path(workdir) / rel))
 
@@ -293,8 +293,8 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                 default_branch=((pr.get("base") or {}).get("repo") or {}).get("default_branch"))
             project = resolve_project(config)
         except ProjectConfigError as e:
-            logger.error("Config de projet invalide : %s", e)
-            return {"error": f"config projet : {e}"}
+            logger.error("Invalid project config: %s", e)
+            return {"error": f"project config: {e}"}
 
         # --- Sélection des reviewers (D4) ---
         files = gh.get_pr_files(pr_number)
@@ -302,7 +302,7 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         context, available = _gather_context(pr, config, logger)
         selected, skipped = select_reviewers(project, changed_paths, available)
         for spec, reason in skipped:
-            logger.info("PR #%s : reviewer '%s' non déclenché (%s)", pr_number, spec.id, reason)
+            logger.info("PR #%s: reviewer '%s' not triggered (%s)", pr_number, spec.id, reason)
         if not selected:
             logger.warning("PR #%s : aucun reviewer déclenché, rien à faire", pr_number)
             return {"skipped": True, "reason": "no_reviewer_triggered"}
@@ -359,7 +359,8 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                     silent_when_clean=spec.silent_when_clean,
                     # Seul un relecteur de conseils (`findings = false`) affiche des
                     # conseils : ailleurs, ils feraient doublon avec lui.
-                    advice=not spec.findings and not config.baseline)
+                    advice=not spec.findings and not config.baseline,
+                    language=spec.language)
             for spec, result in outcomes
         ]
         # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après

@@ -157,7 +157,7 @@ def test_raison_du_verificateur_seulement_avec_le_texte():
 
 def test_methode_injectee_avant_le_contrat():
     prompt = _build_prompt(7, "t", "/tmp/x.diff", _config(), _spec())
-    assert prompt.index("Phase 2 : vérification") < prompt.index("Contrat de sortie")
+    assert prompt.index("Phase 2: verification") < prompt.index("Output contract")
     assert "evidence" in prompt
 
 
@@ -181,7 +181,7 @@ def test_finding_infirme_n_est_pas_annonce_corrige():
     f = _findings()[0]
     f.verification = {"status": "refuted"}
     prep = prepare(PR, _config(), ctx, ReviewResult("COMMENT", "s", [f]), LOGGER, "tech")
-    assert not any("n'apparaît plus" in msg for _, msg in prep.replies)
+    assert not any("no longer appears" in msg for _, msg in prep.replies)
 
 
 def test_commentaire_signale_l_absence_de_verification():
@@ -189,7 +189,7 @@ def test_commentaire_signale_l_absence_de_verification():
     f = _findings()[0]
     f.verification = {"status": "error"}
     prep = prepare(PR, _config(), ctx, ReviewResult("COMMENT", "s", [f]), LOGGER, "tech")
-    assert "non vérifiée" in prep.batch[0]["body"]
+    assert "not verified" in prep.batch[0]["body"]
 
 
 def test_invocation_cli(monkeypatch):

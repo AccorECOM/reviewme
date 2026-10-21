@@ -79,7 +79,7 @@ def run_precheck(spec: ReviewerSpec, config: Config, logger: logging.Logger,
         return ""
     if len(out) > _MAX_OUTPUT:
         logger.info("[%s] precheck : sortie tronquée (%d car.)", spec.id, len(out))
-        out = out[:_MAX_OUTPUT] + "\n\n_(sortie tronquée)_"
+        out = out[:_MAX_OUTPUT] + "\n\n_(output truncated)_"
 
     logger.info("[%s] precheck : %d car. de faits établis injectés", spec.id, len(out))
-    return f"# Faits établis par analyse déterministe (fiables — produits par notre outillage)\n\n{out}"
+    return f"# Facts established by deterministic analysis (reliable — produced by our tooling)\n\n{out}"

@@ -12,7 +12,7 @@ tuyauterie, pas une simulation de bout en bout.
 Les findings sont ancrés sur de VRAIES lignes ajoutées du diff : sans ça, ils seraient
 tous rejetés par la validation anti-422 et on ne testerait rien.
 
-À combiner avec `DRY_RUN=1` en général — sinon des remarques marquées [SIMULÉ]
+À combiner avec `DRY_RUN=1` en général — sinon des remarques marquées [SIMULATED]
 atterrissent sur une vraie PR.
 """
 from __future__ import annotations
@@ -32,9 +32,9 @@ _ENTETE_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 # par les membres de Severity. Une chaîne brute retomberait silencieusement sur [MINOR]
 # pour les trois, et le tri par sévérité — qui pilote le plafonnement — ne testerait rien.
 _GABARITS = (
-    (95, Severity.BLOCKER, "Finding simulé à confiance haute : doit être posté."),
-    (75, Severity.IMPORTANT, "Finding simulé juste au-dessus du seuil : doit être posté."),
-    (40, Severity.MINOR, "Finding simulé sous le seuil : doit être écarté (`dropped_low`)."),
+    (95, Severity.BLOCKER, "Simulated finding, high confidence: must be posted."),
+    (75, Severity.IMPORTANT, "Simulated finding just above the threshold: must be posted."),
+    (40, Severity.MINOR, "Simulated finding below the threshold: must be dropped (`dropped_low`)."),
 )
 
 
@@ -76,21 +76,21 @@ def review_simulee(reviewer_id: str, diff: str) -> ReviewResult:
         chemin, ligne, contenu = candidates[(decalage + i * 7) % len(candidates)]
         findings.append(Finding(
             path=chemin, line=ligne, severity=severite,
-            message=f"[SIMULÉ · {reviewer_id}] {texte}",
+            message=f"[SIMULATED · {reviewer_id}] {texte}",
             snippet=contenu.strip()[:80], rule_id=f"fake.{reviewer_id}.{i}",
             confidence=confiance,
         ))
 
     return ReviewResult(
         status="COMMENT",
-        summary=(f"[SIMULÉ · {reviewer_id}] Aucun modèle n'a été appelé "
-                 f"(`REVIEWME_FAKE`). {len(findings)} finding(s) fabriqué(s) sur "
-                 f"{len(candidates)} ligne(s) ajoutée(s) du diff."),
+        summary=(f"[SIMULATED · {reviewer_id}] No model was called "
+                 f"(`REVIEWME_FAKE`). {len(findings)} finding(s) made up from "
+                 f"{len(candidates)} added line(s) of the diff."),
         findings=findings,
         # Un conseil ancré sur un vrai fichier du diff : la section « Conseil pour la
         # relecture » doit apparaître dans le résumé simulé.
-        advice=[Advice(topic=f"[SIMULÉ · {reviewer_id}] Point à valider par un humain",
-                       why="Conseil fabriqué pour tester l'affichage.",
+        advice=[Advice(topic=f"[SIMULATED · {reviewer_id}] Point for a human to check",
+                       why="Made-up advice to test the display.",
                        paths=[candidates[0][0]])] if candidates else [],
         raw="",
         metadata={"model": "simulé", "cost_usd": 0.0, "duration_ms": 0,

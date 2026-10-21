@@ -1,0 +1,13 @@
+# "advisor" reviewer: does not look for defects. It tells the HUMAN reviewer what they must
+# validate themselves on this PR, and why. Nothing applicable: it posts nothing.
+output_mode = "global"     # a single comment, updated from commit to commit
+priority = 50              # after the reviewers that look for defects
+findings = false           # advice-only reviewer: never a finding, its advice is
+                           # shown in the review-advice section of the comment
+silent_when_clean = true   # no applicable advice: no comment
+max_turns = 25
+
+[verification]
+enabled = false            # there is no finding to verify
+
+# enabled = false          # puts this reviewer to sleep without deleting its folder

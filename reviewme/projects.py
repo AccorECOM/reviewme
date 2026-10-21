@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from .config import CONFIG_DIR, Config
+from .strings import normalize as normalize_language
 
 #: Emplacement par défaut des projets (dans le repo du core).
 PROJECTS_DIR = CONFIG_DIR / "projects"
@@ -101,7 +102,8 @@ class ReviewerSpec:
     verify_max_turns: int = DEFAULT_VERIFY_MAX_TURNS
     silent_when_clean: bool = False        # mode `global` : ne rien poster quand rien à dire
     context_auto: bool = True              # lire CLAUDE.md / AGENTS.md / .claude/rules seul
-    findings: bool = True                  # False = relecteur de CONSEILS (ex. `conseil`) :
+    language: str = "en"                   # langue des remarques (`[review] language`)
+    findings: bool = True                  # False = relecteur de CONSEILS (ex. `advisor`) :
                                            # ne poste jamais de remarque, seulement ses
                                            # « Conseil pour la relecture » (`advice`)
 
@@ -115,6 +117,7 @@ class ProjectConfig:
     directory: Path | None
     reviewers: tuple[ReviewerSpec, ...] = field(default_factory=tuple)
     simple: bool = False                   # True = projet virtuel du mode simple
+    language: str = "en"                   # langue des remarques et des textes postés
     ledger_include_text: bool = False      # `[ledger] include_text` du project.toml : le
                                            # registre garde-t-il le texte des remarques ?
 
@@ -144,7 +147,7 @@ def _read_toml(path: Path) -> dict:
         with path.open("rb") as fh:
             return tomllib.load(fh)
     except tomllib.TOMLDecodeError as e:
-        raise ProjectConfigError(f"{path} : TOML invalide ({e})") from e
+        raise ProjectConfigError(f"{path}: invalid TOML ({e})") from e
 
 
 def _concat_markdown(directory: Path) -> str:
@@ -175,25 +178,25 @@ def _load_reviewer(project_name: str, project_dir: Path, reviewer_id: str,
     rdir = project_dir / "reviewers" / reviewer_id
     system_file = rdir / "system.md"
     if not system_file.exists():
-        raise ProjectConfigError(f"reviewer '{reviewer_id}' : `system.md` manquant dans {rdir}")
+        raise ProjectConfigError(f"reviewer '{reviewer_id}': `system.md` missing in {rdir}")
 
     data = _read_toml(rdir / "reviewer.toml") if (rdir / "reviewer.toml").exists() else {}
     mode = str(data.get("output_mode", "inline")).lower()
     if mode not in OUTPUT_MODES:
         raise ProjectConfigError(
-            f"reviewer '{reviewer_id}' : output_mode '{mode}' inconnu (attendu : {', '.join(OUTPUT_MODES)})")
+            f"reviewer '{reviewer_id}': unknown output_mode '{mode}' (expected: {', '.join(OUTPUT_MODES)})")
 
     requires = tuple(data.get("requires", ()) or ())
     inconnus = [r for r in requires if r not in KNOWN_CONTEXTS]
     if inconnus:
         raise ProjectConfigError(
-            f"reviewer '{reviewer_id}' : contexte inconnu dans `requires` : "
-            f"{', '.join(inconnus)}. Valeurs possibles : {', '.join(sorted(KNOWN_CONTEXTS))}")
+            f"reviewer '{reviewer_id}': unknown context in `requires`: "
+            f"{', '.join(inconnus)}. Possible values: {', '.join(sorted(KNOWN_CONTEXTS))}")
 
     if data.get("silent_when_clean") and mode != "global":
         raise ProjectConfigError(
-            f"reviewer '{reviewer_id}' : `silent_when_clean` ne vaut qu'en output_mode "
-            f"\"global\" (ici \"{mode}\") : en inline, une PR propre ne reçoit déjà rien")
+            f"reviewer '{reviewer_id}': `silent_when_clean` only applies to output_mode "
+            f"\"global\" (here \"{mode}\"): inline, a clean PR already gets nothing")
     when = data.get("when", {}) or {}
     context = data.get("context", {}) or {}
     verification = data.get("verification", {}) or {}
@@ -237,7 +240,7 @@ def _positive_int(value, key: str, reviewer_id: str) -> int:
     except (TypeError, ValueError):
         n = 0
     if n <= 0:
-        raise ProjectConfigError(f"reviewer '{reviewer_id}' : `{key}` doit être un entier > 0")
+        raise ProjectConfigError(f"reviewer '{reviewer_id}': `{key}` must be an integer > 0")
     return n
 
 
@@ -256,20 +259,20 @@ def _adapt_core(spec: ReviewerSpec, overrides: dict, project_name: str) -> Revie
     """
     import dataclasses
     if not isinstance(overrides, dict):
-        raise ProjectConfigError(f"projet '{project_name}' : `[reviewers.{spec.id}]` doit "
-                                 f"être une table")
+        raise ProjectConfigError(f"project '{project_name}': `[reviewers.{spec.id}]` must "
+                                 f"be a table")
     inconnues = sorted(set(overrides) - set(CORE_OVERRIDES))
     if inconnues:
         raise ProjectConfigError(
-            f"projet '{project_name}' : `[reviewers.{spec.id}]` : clé(s) inconnue(s) "
-            f"{inconnues} (possibles : {', '.join(CORE_OVERRIDES)})")
+            f"project '{project_name}': `[reviewers.{spec.id}]`: unknown key(s) "
+            f"{inconnues} (possible: {', '.join(CORE_OVERRIDES)})")
     changes: dict = {}
     if "read" in overrides:
         changes["context_read"] = spec.context_read + tuple(overrides["read"] or ())
     if "paths" in overrides:
         changes["when_paths"] = tuple(overrides["paths"] or ())
     if overrides.get("instructions"):
-        changes["system_prompt"] = (f"{spec.system_prompt}\n\n# Spécificités de ce projet\n"
+        changes["system_prompt"] = (f"{spec.system_prompt}\n\n# Specifics of this project\n"
                                     f"{str(overrides['instructions']).strip()}")
     if "model" in overrides:
         changes["model"] = str(overrides["model"])
@@ -290,8 +293,8 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
         available = sorted(p.name for p in root.iterdir()
                            if p.is_dir() and not p.name.startswith(".")) if root.is_dir() else []
         raise ProjectConfigError(
-            f"projet '{name}' introuvable dans {root}"
-            + (f" (disponibles : {', '.join(available)})" if available else ""))
+            f"project '{name}' not found in {root}"
+            + (f" (available: {', '.join(available)})" if available else ""))
 
     # Réglages du PROJET (et non d'un reviewer), optionnels.
     settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
@@ -307,14 +310,14 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
     # la liste `core`.
     core_ids = (settings.get("reviewers", {}) or {}).get("core", []) or []
     if not isinstance(core_ids, list):
-        raise ProjectConfigError(f"projet '{name}' : `[reviewers] core` doit être une liste")
+        raise ProjectConfigError(f"project '{name}': `[reviewers] core` must be a list")
     disponibles = sorted(d.name for d in (TEMPLATES_DIR / "reviewers").iterdir()
                          if d.is_dir()) if (TEMPLATES_DIR / "reviewers").is_dir() else []
     inconnus = [r for r in core_ids if r not in disponibles]
     if inconnus:
         raise ProjectConfigError(
-            f"projet '{name}' : reviewer(s) du core inconnu(s) {inconnus} "
-            f"(disponibles : {', '.join(disponibles)})")
+            f"project '{name}': unknown core reviewer(s) {inconnus} "
+            f"(available: {', '.join(disponibles)})")
 
     rroot = pdir / "reviewers"
     local_ids = sorted(d.name for d in rroot.iterdir()
@@ -324,11 +327,11 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
         # dix. Le dire, sinon le message envoie chercher au mauvais endroit.
         if not any(pdir.iterdir()):
             raise ProjectConfigError(
-                f"projet '{name}' : dossier vide ({pdir}). S'il s'agit d'un submodule git, "
-                f"l'initialiser : `git submodule update --init --recursive`")
+                f"project '{name}': empty folder ({pdir}). If it is a git submodule, "
+                f"initialise it: `git submodule update --init --recursive`")
         raise ProjectConfigError(
-            f"projet '{name}' : aucun reviewer (un sous-dossier de `reviewers/`, ex. "
-            f"`reviewers/tech/`, ou `[reviewers] core = [\"tech\"]` dans project.toml)")
+            f"project '{name}': no reviewer (a sub-folder of `reviewers/`, e.g. "
+            f"`reviewers/tech/`, or `[reviewers] core = [\"tech\"]` in project.toml)")
 
     common = _load_common(pdir)
     specs = [_load_reviewer(name, pdir, rid, common) for rid in local_ids]
@@ -339,10 +342,20 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
     active = tuple(s for s in specs if s.enabled)
     if not active:
         raise ProjectConfigError(
-            f"projet '{name}' : tous les reviewers sont désactivés (`enabled = false`)")
+            f"project '{name}': every reviewer is disabled (`enabled = false`)")
+
+    try:
+        language = normalize_language(
+            (settings.get("review", {}) or {}).get("language")
+            or os.environ.get("REVIEWME_LANGUAGE"))
+    except ValueError as e:
+        raise ProjectConfigError(f"project '{name}': `[review] language`: {e}") from e
+    import dataclasses
+    active = tuple(dataclasses.replace(s, language=language) for s in active)
 
     return ProjectConfig(name=name, directory=pdir, reviewers=active,
-                         ledger_include_text=bool(ledger.get("include_text", False)))
+                         ledger_include_text=bool(ledger.get("include_text", False)),
+                         language=language)
 
 
 def _simple_project(config: Config) -> ProjectConfig:
@@ -360,8 +373,10 @@ def _simple_project(config: Config) -> ProjectConfig:
         output_mode="inline",
         common=_concat_markdown(TEMPLATES_DIR / "common"),
         directory=tech,
+        language=normalize_language(os.environ.get("REVIEWME_LANGUAGE")),
     )
-    return ProjectConfig(name="(mode simple)", directory=None, reviewers=(spec,), simple=True)
+    return ProjectConfig(name="(mode simple)", directory=None, reviewers=(spec,), simple=True,
+                         language=spec.language)
 
 
 def resolve_project(config: Config) -> ProjectConfig:
@@ -390,10 +405,10 @@ def select_reviewers(project: ProjectConfig, changed_paths: list[str],
     for spec in sorted(project.reviewers, key=lambda s: (s.priority, s.id)):
         missing = [r for r in spec.requires if r not in available]
         if missing:
-            skipped.append((spec, f"contexte manquant : {', '.join(missing)}"))
+            skipped.append((spec, f"missing context: {', '.join(missing)}"))
             continue
         if spec.when_paths and not any(_matches(p, spec.when_paths) for p in changed_paths):
-            skipped.append((spec, "aucun fichier du diff ne correspond à when.paths"))
+            skipped.append((spec, "no file of the diff matches when.paths"))
             continue
         kept.append(spec)
 
