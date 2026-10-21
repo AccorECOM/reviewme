@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
@@ -130,3 +131,46 @@ def probe(env: Mapping[str, str] | None = None, model: str = "") -> list[str]:
 def looks_like_auth_error(text: str) -> bool:
     low = (text or "").lower()
     return "401" in low or "authenticat" in low or "invalid proxy server token" in low
+
+
+_KEY_HASH_RE = re.compile(r"key hash[^=:]*[=:]\s*([0-9a-f]{64})", re.IGNORECASE)
+
+BANNER_START = "=" * 72
+BANNER_TITLE = "LLM GATEWAY AUTHENTICATION FAILED: running diagnostics (no secret printed)"
+
+
+def verdict(error_text: str, env: Mapping[str, str] | None = None) -> list[str]:
+    """Matches the key hash a LiteLLM-style gateway prints against each credential.
+
+    The gateway says which key it received only as a SHA-256: comparing it with ours tells
+    whether the CLI sent the expected variable (then the gateway does not know that token)
+    or another one (then the environment is wrong).
+    """
+    env = os.environ if env is None else env
+    m = _KEY_HASH_RE.search(error_text or "")
+    if not m:
+        return ["verdict: the gateway did not print a key hash; see the probe results above"]
+    received = m.group(1).lower()
+    for name in _CREDENTIALS:
+        value = env.get(name) or ""
+        if value and hashlib.sha256(value.encode("utf-8")).hexdigest() == received:
+            return [f"verdict: the gateway received {name} (hash match) and rejected it.",
+                    f"         The token itself is unknown to the gateway: expired, revoked, or "
+                    f"issued for another environment than {gateway_host(env)}."]
+    return ["verdict: the key the gateway received matches NONE of ANTHROPIC_AUTH_TOKEN / "
+            "ANTHROPIC_API_KEY.",
+            "         Something else injects a credential (CLI settings, apiKeyHelper, "
+            "ANTHROPIC_CUSTOM_HEADERS)."]
+
+
+def report(error_text: str = "", model: str = "", env: Mapping[str, str] | None = None,
+           *, with_probe: bool = True) -> list[str]:
+    """The full block, framed so it stands out in a CI log."""
+    lines = [BANNER_START, BANNER_TITLE, BANNER_START]
+    lines += describe_env(env)
+    if with_probe:
+        lines += probe(env, model=model)
+    if error_text:
+        lines += verdict(error_text, env)
+    lines.append(BANNER_START)
+    return lines

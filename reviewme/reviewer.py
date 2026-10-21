@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 from .config import Config
-from .llm_diag import describe_env, looks_like_auth_error, probe
+from .llm_diag import looks_like_auth_error, report
 from .models import ReviewResult, parse_review_output
 from .projects import ReviewerSpec, load_output_contract, load_review_method, resolve_project
 from .scrub import scrub_text
@@ -257,19 +257,29 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
         _log.warning("[%s] stderr (returncode=%s): %s", label, result.returncode,
                      stderr[:1000])
 
+    if agent_text and metadata.get("is_error"):
+        _diagnose_auth(label, model, agent_text[:2000])
+
     if not agent_text:
-        if looks_like_auth_error(stderr) or looks_like_auth_error(stdout[:2000]):
-            # The CLI only relays the gateway's message. Say what it could have sent
-            # (fingerprints, never values) and check each credential alone.
-            _log.warning("[%s] authentication error from the LLM gateway; diagnostics "
-                         "(no secret is printed):", label)
-            for line in describe_env() + probe(model=model):
-                _log.warning("[%s]   %s", label, line)
+        _diagnose_auth(label, model, stderr + "\n" + stdout[:2000])
         raise RuntimeError(
             f"claude returncode={result.returncode}, no usable output: "
             f"{stderr[:500]}"
         )
     return agent_text, metadata
+
+
+def _diagnose_auth(label: str, model: str, error_text: str) -> None:
+    """On a gateway authentication error, log a framed diagnostic block (ERROR level).
+
+    The CLI only relays the gateway's message: the block says what the CLI could have sent
+    (fingerprints, never values), probes each credential alone, and matches the key hash
+    the gateway printed against our credentials.
+    """
+    if not looks_like_auth_error(error_text):
+        return
+    for line in report(scrub_text(error_text), model=model):
+        _log.error("[%s] %s", label, line)
 
 
 def write_diff(pr_diff: str) -> str:

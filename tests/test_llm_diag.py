@@ -68,3 +68,25 @@ def test_probe_adds_custom_headers_by_name_only(monkeypatch):
 def test_auth_error_detection():
     assert llm_diag.looks_like_auth_error("Failed to authenticate. API Error: 401 Authentication Error")
     assert not llm_diag.looks_like_auth_error("max turns reached")
+
+
+def test_verdict_names_the_variable_the_gateway_received():
+    h = hashlib.sha256(TOKEN.encode()).hexdigest()
+    err = f"401 Authentication Error, Invalid proxy server token passed. Key Hash (Token) ={h}."
+    env = {"ANTHROPIC_BASE_URL": "https://gw.example", "ANTHROPIC_AUTH_TOKEN": TOKEN}
+    text = "\n".join(llm_diag.verdict(err, env))
+    assert "received ANTHROPIC_AUTH_TOKEN (hash match)" in text and "gw.example" in text
+
+
+def test_verdict_when_no_credential_matches():
+    err = "Key Hash (Token) =" + "0" * 64
+    text = "\n".join(llm_diag.verdict(err, {"ANTHROPIC_AUTH_TOKEN": TOKEN}))
+    assert "matches NONE" in text
+
+
+def test_report_is_framed_and_leaks_nothing():
+    env = {"ANTHROPIC_AUTH_TOKEN": TOKEN}
+    lines = llm_diag.report("401", env=env, with_probe=False)
+    assert lines[0] == lines[2] == lines[-1] == llm_diag.BANNER_START
+    assert lines[1] == llm_diag.BANNER_TITLE
+    assert TOKEN not in "\n".join(lines)

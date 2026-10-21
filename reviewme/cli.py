@@ -269,12 +269,15 @@ def _doctor(args: argparse.Namespace) -> int:
         load_config(require_repo=False)   # loads .env the same way the review does
     except Exception as e:
         print(f"(config not loaded: {e})")
-    print("LLM environment as the CLI will see it:")
+    print("=" * 72)
+    print("ReviewMe doctor: LLM gateway check (no secret printed)")
+    print("=" * 72)
     for line in describe_env():
         print(f"  {line}")
     if not args.no_probe:
         for line in probe(model=args.model):
             print(line)
+    print("=" * 72)
     return 0
 
 
