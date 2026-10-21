@@ -1,0 +1,9 @@
+# Functional reviewer: does the code cover what the ticket asked for?
+output_mode = "global"     # "AC3 not covered" has no diff line to point to
+priority = 20
+# Required contexts. Possible value today: "jira_ticket" (ticket + acceptance
+# criteria). An unknown value is rejected at load time, not ignored.
+requires = ["jira_ticket"] # no ticket detected (or Jira not configured) -> reviewer skipped
+silent_when_clean = true   # everything is covered -> no comment, rather than a "nothing to report"
+
+# enabled = false        # puts this reviewer to sleep without deleting its folder

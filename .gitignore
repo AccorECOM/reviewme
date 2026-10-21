@@ -1,0 +1,37 @@
+# --- Secrets: NEVER commit ---
+.env
+.env.*
+!.env.example
+
+# --- Review data (internal content, real PRs): never in the repository ---
+data/
+*.diff
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.uv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Divers ---
+.DS_Store
+*.log
+/tmp/
+node_modules/
+
+*.pem
+
+# --- Local tooling ---
+.claude/
+.coverage
+
+# --- Instance data (projects, ledger) ---
+.reviewme/

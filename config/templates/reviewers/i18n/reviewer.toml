@@ -1,0 +1,17 @@
+# Translation reviewer: completeness and quality of localized strings.
+output_mode = "mixed"
+priority = 30
+precheck = "precheck.py"   # missing keys are a FACT: free script, no LLM
+
+[when]
+# Only triggers if the PR touches localization files:
+# without this filter, every PR would pay for this reviewer for nothing.
+paths = [
+  "**/*.strings",
+  "**/*.stringsdict",
+  "**/values*/strings.xml",
+  "**/locales/**/*.json",
+  "**/i18n/**/*.json",
+]
+
+# enabled = false        # puts this reviewer to sleep without deleting its folder

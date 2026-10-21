@@ -1,0 +1,66 @@
+[project]
+name = "reviewme"
+version = "1.0.0"
+description = "AI code review bot: line-by-line inline comments + thread lifecycle, multiple entry points (CLI / poll / webhook / CI)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Joey Barbier" }]
+requires-python = ">=3.13"
+keywords = ["code-review", "github", "pull-request", "llm", "claude", "bot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "httpx>=0.28",
+    "python-dotenv>=1.1",
+]
+
+[project.optional-dependencies]
+# GitHub App auth (dedicated identity). Not needed with a PAT: `uv sync --extra github-app`.
+github-app = ["pyjwt[crypto]>=2.10"]
+
+[project.urls]
+Homepage = "https://github.com/AccorECOM/reviewme"
+Issues = "https://github.com/AccorECOM/reviewme/issues"
+Changelog = "https://github.com/AccorECOM/reviewme/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-cov>=6", "ruff>=0.9"]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["reviewme"]
+
+[project.scripts]
+reviewme = "reviewme.cli:main"            # one-shot: reviewme review --repo O/R --pr N
+reviewme-poll = "reviewme.poll:main"       # poll loop (VPS mode)
+reviewme-webhook = "reviewme.webhook:main" # webhook server (HMAC)
+reviewme-web = "reviewme.web.server:main"  # read-only dashboard
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+per-file-ignores = { "reviewme/report.py" = ["UP031"] }  # CSS template uses %(name)s, braces would clash
+select = ["F", "E", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+  "E501",     # line length: explanatory comments come first
+  "RUF001",   # "ambiguous" characters: docs and prompts contain typographic quotes and accents
+  "RUF002",
+  "RUF003",
+  "SIM115",   # both `open()` calls concerned are closed in a `finally`
+  "UP042",    # `Severity(str, Enum)` -> `StrEnum` would change `str(Severity.X)` from
+              # "Severity.X" to "X": no gain, and a semantic change for a linter
+]
