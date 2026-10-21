@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from .config import Config
 from .diff_utils import normalize_line, resolve_line, valid_positions
 from .github_client import GitHubApiError, GitHubClient
+from .llm_diag import looks_like_auth_error
 from .models import ReviewResult, Severity
 
 # Two accepted forms: `reviewme:<reviewer>:<hash>` (v3) and `reviewme:<hash>` (v0.2).
@@ -248,10 +249,20 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
     head_sha = pr["head"]["sha"]
     counts = {"posted": 0, "replied": 0, "deduped": 0, "out_of_diff": 0,
               "invalid": 0, "dropped_low": 0, "dropped_unverified": 0, "capped": 0,
-              "resolus": 0, "fallback": False}
+              "resolus": 0, "fallback": False, "cli_error": False}
     lang = language
     prep = PreparedReview(reviewer_id=reviewer_id, output_mode=output_mode, counts=counts,
                           findings=list(result.findings), language=lang)
+
+    # --- CLI failure (auth, gateway, crash): nothing to post. The raw text is the
+    # error message, and it may carry fragments of credentials (key suffix, key hash).
+    if not result.parsed_ok and (result.metadata.get("is_error")
+                                 or looks_like_auth_error(result.raw)):
+        logger.error("PR #%s [%s]: the CLI failed (is_error=%s), no comment posted: %s",
+                     pr_number, reviewer_id, result.metadata.get("is_error"),
+                     _scrub(result.raw[:300]))
+        counts["cli_error"] = True
+        return prep
 
     # --- Fallback: unusable JSON -> global comment ---
     if not result.parsed_ok:

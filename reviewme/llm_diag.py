@@ -10,7 +10,7 @@ credential separately against the gateway, the way `curl -v` would, minus the se
   first 3 and last 4 characters, and its SHA-256. LiteLLM-style gateways print the SHA-256
   of the key they received ("Key Hash"): comparing it with the hash below says WHICH
   variable the CLI actually used.
-- a probe per credential: one minimal `POST /v1/messages` (`max_tokens: 1`) with
+- a probe per credential, with the `ANTHROPIC_CUSTOM_HEADERS` the CLI adds (names logged, never values): one minimal `POST /v1/messages` (`max_tokens: 1`) with
   `Authorization: Bearer <ANTHROPIC_AUTH_TOKEN>` only, then with `x-api-key:
   <ANTHROPIC_API_KEY>` only. The status code of each says which one the gateway accepts.
 
@@ -70,6 +70,16 @@ def describe_env(env: Mapping[str, str] | None = None) -> list[str]:
     return lines
 
 
+def custom_headers(env: Mapping[str, str]) -> dict[str, str]:
+    """`ANTHROPIC_CUSTOM_HEADERS` as the CLI reads it: one `Name: value` per line."""
+    out: dict[str, str] = {}
+    for line in (env.get("ANTHROPIC_CUSTOM_HEADERS") or "").splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name.strip():
+            out[name.strip()] = value.strip()
+    return out
+
+
 def _probe_once(base_url: str, headers: dict[str, str], model: str) -> tuple[str, str]:
     """(status, scrubbed excerpt of the body). Status is "ERR <type>" when no HTTP answer."""
     import httpx
@@ -96,7 +106,10 @@ def probe(env: Mapping[str, str] | None = None, model: str = "") -> list[str]:
     base = (env.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com").strip()
     model = model or env.get("CLAUDE_MODEL") or env.get("ANTHROPIC_MODEL") or _DEFAULT_PROBE_MODEL
     common = {"anthropic-version": "2023-06-01", "content-type": "application/json"}
-    lines = [f"probe: POST {base.rstrip('/')}/v1/messages model={model} max_tokens=1"]
+    custom = custom_headers(env)
+    common.update(custom)
+    lines = [f"probe: POST {base.rstrip('/')}/v1/messages model={model} max_tokens=1"
+             + (f" custom headers: {', '.join(custom)}" if custom else "")]
     token = env.get("ANTHROPIC_AUTH_TOKEN") or ""
     key = env.get("ANTHROPIC_API_KEY") or ""
     if token:

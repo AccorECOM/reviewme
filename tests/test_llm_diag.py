@@ -49,6 +49,22 @@ def test_probe_sends_each_credential_alone(monkeypatch):
     assert KEY not in text and TOKEN not in text   # the gateway's echo is scrubbed
 
 
+def test_probe_adds_custom_headers_by_name_only(monkeypatch):
+    seen = {}
+
+    def fake_post(url, json, headers, timeout):
+        seen.update(headers)
+        return httpx.Response(200, json={}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    env = {"ANTHROPIC_BASE_URL": "https://gw.example", "ANTHROPIC_AUTH_TOKEN": TOKEN,
+           "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway-Key: front-door-9876\nX-Tenant: acme"}
+    text = "\n".join(llm_diag.probe(env, model="m"))
+    assert seen["X-Gateway-Key"] == "front-door-9876" and seen["X-Tenant"] == "acme"
+    assert "custom headers: X-Gateway-Key, X-Tenant" in text
+    assert "front-door-9876" not in text
+
+
 def test_auth_error_detection():
     assert llm_diag.looks_like_auth_error("Failed to authenticate. API Error: 401 Authentication Error")
     assert not llm_diag.looks_like_auth_error("max turns reached")

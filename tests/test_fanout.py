@@ -193,6 +193,16 @@ def test_unreadable_json_falls_back_to_global_comment():
     assert prep.counts["fallback"] and prep.global_body and not prep.batch
 
 
+def test_cli_error_posts_nothing():
+    """A gateway 401 relayed by the CLI must never land on the PR as a comment."""
+    err = _result([], parsed_ok=False)
+    err.raw = "Failed to authenticate. API Error: 401 Authentication Error, Key Hash = abc"
+    err.metadata["is_error"] = True
+    prep = prepare(PR, _config(), _ctx(), err, LOGGER, "tech")
+    assert prep.counts["cli_error"] and not prep.counts["fallback"]
+    assert prep.global_body is None and not prep.batch
+
+
 def test_prefix_only_in_multi_reviewer():
     solo = prepare(PR, _config(), _ctx(), _result([_finding()]), LOGGER, "tech")
     multi = prepare(PR, _config(), _ctx(), _result([_finding()]), LOGGER, "tech", prefix="[TECH]")
