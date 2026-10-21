@@ -8,6 +8,7 @@ Additional commands:
   `reviewme projects`             lists projects and their reviewers
   `reviewme enrich --since 14d`   what happened to posted comments (👍/👎, replies, follow-up)
   `reviewme export --since 7d`    analysis archive + readable report (see `export.py`)
+  `reviewme doctor`               LLM gateway diagnostics (variables, fingerprints, probes)
 """
 from __future__ import annotations
 
@@ -61,6 +62,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     ex.add_argument("--since", default="7d", help="Window, e.g. 7d (default: 7d)")
     ex.add_argument("--out", required=True, help="Output folder")
     ex.add_argument("--repo", dest="ex_repo", help="OWNER/REPO, for the report links")
+    dr = sub.add_parser("doctor", help="LLM gateway diagnostics: what the CLI would send, "
+                        "and whether each credential is accepted (no secret printed)")
+    dr.add_argument("--model", default="", help="Model to request in the probe")
+    dr.add_argument("--no-probe", action="store_true", help="Only describe the environment")
     return parser.parse_args(argv)
 
 
@@ -257,8 +262,27 @@ def _export(args) -> int:
     return 0
 
 
+def _doctor(args: argparse.Namespace) -> int:
+    from .config import load_config
+    from .llm_diag import describe_env, probe
+    try:
+        load_config(require_repo=False)   # loads .env the same way the review does
+    except Exception as e:
+        print(f"(config not loaded: {e})")
+    print("LLM environment as the CLI will see it:")
+    for line in describe_env():
+        print(f"  {line}")
+    if not args.no_probe:
+        for line in probe(model=args.model):
+            print(line)
+    return 0
+
+
 def main() -> None:
     args = _parse_args(sys.argv[1:])
+
+    if args.command == "doctor":
+        raise SystemExit(_doctor(args))
 
     if args.command == "init-project":
         raise SystemExit(_init_project(args.name, [r.strip() for r in args.reviewers.split(",") if r.strip()]))

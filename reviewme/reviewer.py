@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from .config import Config
+from .llm_diag import describe_env, looks_like_auth_error, probe
 from .models import ReviewResult, parse_review_output
 from .projects import ReviewerSpec, load_output_contract, load_review_method, resolve_project
 from .scrub import scrub_text
@@ -257,6 +258,13 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
                      stderr[:1000])
 
     if not agent_text:
+        if looks_like_auth_error(stderr) or looks_like_auth_error(stdout[:2000]):
+            # The CLI only relays the gateway's message. Say what it could have sent
+            # (fingerprints, never values) and check each credential alone.
+            _log.warning("[%s] authentication error from the LLM gateway; diagnostics "
+                         "(no secret is printed):", label)
+            for line in describe_env() + probe(model=model):
+                _log.warning("[%s]   %s", label, line)
         raise RuntimeError(
             f"claude returncode={result.returncode}, no usable output: "
             f"{stderr[:500]}"
