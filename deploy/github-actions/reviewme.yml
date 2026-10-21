@@ -1,0 +1,61 @@
+# Déclencher ReviewMe sur chaque PR via GitHub Actions.
+# À placer dans `.github/workflows/` du dépôt CIBLE (celui dont on review les PR).
+#
+# Secrets attendus :
+#   REVIEWME_GITHUB_TOKEN : PAT fine-grained, Pull requests R/W sur ce dépôt.
+#                           Pas le GITHUB_TOKEN par défaut, qui ne déclenche pas
+#                           les autres workflows depuis ses commentaires.
+#   ANTHROPIC_API_KEY     : clé du modèle, ou passerelle via ANTHROPIC_BASE_URL.
+#
+# ⚠️ Sécurité : le moteur lit un diff NON FIABLE. On utilise `pull_request` et non
+# `pull_request_target` : les secrets ne sont pas exposés aux PR de forks. Pour
+# reviewer les forks, prévoir une approbation manuelle.
+
+name: ReviewMe
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      # Le dépôt à reviewer : l'agent y lit les fichiers pour contextualiser ses findings.
+      - uses: actions/checkout@v4
+
+      # Le moteur, sur une VERSION ÉPINGLÉE : ce job porte des secrets, ce qui s'y exécute
+      # ne doit pas pouvoir changer entre deux runs sans revue.
+      - uses: actions/checkout@v4
+        with:
+          repository: AccorECOM/reviewme
+          ref: v1.0.0
+          path: .reviewme-core
+
+      - uses: astral-sh/setup-uv@v5
+      - run: npm install -g @anthropic-ai/claude-code
+
+      - name: Review de la PR
+        working-directory: .reviewme-core
+        env:
+          GITHUB_TOKEN: ${{ secrets.REVIEWME_GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO_PATH: ${{ github.workspace }}
+
+          # La configuration de review vit dans le dépôt lui-même (.reviewme/).
+          # Pour une instance séparée : cloner ce dépôt et pointer dessus.
+          REVIEWME_CONFIG_HOME: ${{ github.workspace }}/.reviewme
+          PROJECT: mon-repo
+
+          CONFIDENCE_THRESHOLD: "80"
+          MAX_COMMENTS_PER_PR: "10"
+          MAX_BUDGET_USD: "3.00"
+        run: |
+          uv sync --frozen
+          uv run reviewme review --pr "${{ github.event.pull_request.number }}"
+          # Premiers essais : ajouter --dry-run pour ne rien poster.
