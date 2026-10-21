@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `reviewme watch`: local loop that polls a repository's open PRs and reviews each new
+  commit, wherever the Claude Code CLI runs (as configured on that machine). Each PR is
+  reviewed in its own `git worktree`, so the clone is never touched; config is still read
+  from the base branch. Every open PR by default, minus drafts, forks and the `no-ai-review`
+  label; `--label` to opt in instead.
+- A usage limit (plan quota, 429, overloaded) no longer marks the commit as failed:
+  it is retried, and watch waits for the reset.
+- Local state keyed by `owner/repo#N` (legacy `N` keys still read).
+- `reviewme-poll` is now the same loop as `reviewme watch`, configured from `.env`.
+
 ## 1.0.0
 
 First public release.

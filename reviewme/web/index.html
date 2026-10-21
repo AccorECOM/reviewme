@@ -165,7 +165,7 @@
             el.innerHTML = entries.map(([num, e]) => `
                 <div class="card error-card">
                     <div class="card-header">
-                        <span class="pr-number">#${num}</span>
+                        <span class="pr-number">${escapeHtml(num.includes('#') ? num : '#' + num)}</span>
                         <span class="pr-title">${escapeHtml(e.title)}</span>
                         <span class="time">${timeAgo(e.failed_at)}</span>
                     </div>

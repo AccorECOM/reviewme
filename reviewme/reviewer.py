@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,6 +42,38 @@ _ALLOWED_TOOLS = "Read,Glob,Grep,Bash(git log:*),Bash(git show:*),Bash(git diff:
 # execution that `_load_instance_env` and the precheck confinement closed.
 # To vary the model by task: create one more reviewer with its own `model`.
 _TIMEOUT_S = 900
+
+# Messages the CLI prints when the account's quota is exhausted (plan usage limits:
+# "Claude AI usage limit reached|<epoch>", "5-hour limit reached · resets 3pm", "You've
+# hit your limit") or when the API pushes back (429, overloaded). Only checked on a
+# FAILED call: a review that mentions "429" in its text is not affected.
+_USAGE_LIMIT_RE = re.compile(
+    r"usage limit reached|limit reached\b.{0,40}\bresets?\b|hit your (?:usage )?limit"
+    r"|rate_limit_error|overloaded_error|\b(?:429|529)\b", re.IGNORECASE)
+_RESET_EPOCH_RE = re.compile(r"limit reached\|(\d{10})\b", re.IGNORECASE)
+
+
+class UsageLimitError(RuntimeError):
+    """The model refused the call for quota reasons: try again later, not a failure.
+
+    Kept apart from other errors so that the commit is NOT marked as failed (a failed
+    commit is never retried) and so that a watch loop can back off. `retry_at` is the
+    reset time (epoch seconds) when the CLI gives one.
+    """
+
+    def __init__(self, message: str, retry_at: float | None = None):
+        super().__init__(message)
+        self.retry_at = retry_at
+
+
+def usage_limit_in(text: str) -> UsageLimitError | None:
+    """The quota error described by `text`, if it is one."""
+    m = _USAGE_LIMIT_RE.search(text or "")
+    if not m:
+        return None
+    epoch = _RESET_EPOCH_RE.search(text)
+    return UsageLimitError(f"usage limit: {scrub_text(m.group(0))}",
+                           retry_at=float(epoch.group(1)) if epoch else None)
 
 
 def _find_claude(config: Config | None = None) -> str:
@@ -256,6 +289,12 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
     if stderr and (config.debug or result.returncode != 0):
         _log.warning("[%s] stderr (returncode=%s): %s", label, result.returncode,
                      stderr[:1000])
+
+    if not agent_text or metadata.get("is_error"):
+        limit = usage_limit_in(stderr + "\n" + (agent_text or stdout)[:2000])
+        if limit:
+            _log.warning("[%s] %s: not a review failure, to retry later", label, limit)
+            raise limit
 
     if agent_text and metadata.get("is_error"):
         _diagnose_auth(label, model, agent_text[:2000])
