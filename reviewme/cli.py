@@ -4,6 +4,7 @@ It is the shared building block ("one PR, one review, then exit"), reused by the
 (called in a loop/cron), by a webhook, or by a CI step (Bitrise / GitHub Actions).
 
 Additional commands:
+  `reviewme watch --repo O/R --every 10m`  poll the open PRs and review each one
   `reviewme init-project <repo>`  creates `config/projects/<repo>/` from the skeleton
   `reviewme projects`             lists projects and their reviewers
   `reviewme enrich --since 14d`   what happened to posted comments (👍/👎, replies, follow-up)
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -23,6 +25,7 @@ from .logging_ import setup_logging
 from .projects import PROJECTS_DIR as PROJECTS_DIR_DEFAULT
 from .projects import TEMPLATES_DIR, ProjectConfigError, load_project, projects_dir
 from .run import run_review_by_number
+from .watch import DEFAULT_SKIP_LABEL
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -35,6 +38,31 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--pr", type=int, help="PR number")
         p.add_argument("--force", action="store_true", help="Re-review even if already done for this commit")
         p.add_argument("--dry-run", action="store_true", help="Post nothing, log only")
+
+    wa = sub.add_parser("watch", help="Poll the open PRs and review each one (local loop)",
+                        description="Every N minutes, list the repo's open PRs and review "
+                        "the commits not reviewed yet, each in its own git worktree. Meant "
+                        "for a machine where the Claude Code CLI is logged in.")
+    wa.add_argument("--repo", dest="wa_repo", metavar="OWNER/REPO", help="OWNER/REPO (otherwise GITHUB_REPO)")
+    wa.add_argument("--repo-path", metavar="PATH", help="Local clone of the repo (otherwise REPO_PATH)")
+    wa.add_argument("--every", help="Interval: 600, 90s, 10m, 1h (default: POLL_INTERVAL "
+                    "or 10m, minimum 1m)")
+    wa.add_argument("--label", default="",
+                    help="Only review PRs carrying this label (default: every open PR)")
+    wa.add_argument("--skip-label",
+                    default=os.environ.get("REVIEWME_SKIP_LABEL", DEFAULT_SKIP_LABEL),
+                    help=f"Never review PRs carrying this label (default: {DEFAULT_SKIP_LABEL}"
+                    ", REVIEWME_SKIP_LABEL; empty to disable)")
+    wa.add_argument("--include-drafts", action="store_true", help="Also review draft PRs")
+    wa.add_argument("--include-forks", action="store_true",
+                    help="Also review PRs opened from forks (untrusted authors)")
+    wa.add_argument("--parallel", type=int, default=1,
+                    help="PRs reviewed at the same time (default: 1)")
+    wa.add_argument("--once", action="store_true", help="One round, then exit (cron, tests)")
+    wa.add_argument("--dashboard", action="store_true",
+                    help="Serve the read-only dashboard on 127.0.0.1:8420")
+    wa.add_argument("--dry-run", dest="wa_dry_run", action="store_true",
+                    help="Post nothing, log only")
 
     ip = sub.add_parser("init-project", help="Create a project folder from the skeleton")
     ip.add_argument("name", help="Folder name = REPO name (e.g. my-app), never the team's")
@@ -130,6 +158,38 @@ def _list_projects() -> int:
             needs = f", requires {list(spec.requires)}" if spec.requires else ""
             print(f"{name} · {spec.id} ({spec.output_mode}, priority {spec.priority}{when}{needs})")
     return 0
+
+
+def _watch(args) -> int:
+    from .watch import WatchOptions, default_interval, parse_interval, watch
+
+    if args.repo_path:
+        # Before `load_config`: it tells a config in the reviewed repo by REPO_PATH.
+        os.environ["REPO_PATH"] = args.repo_path
+    config = load_config(require_repo=False)
+    overrides: dict = {"dry_run": args.wa_dry_run or config.dry_run}
+    if args.wa_repo:
+        overrides["github_repo"] = args.wa_repo
+    if args.repo_path:
+        overrides["repo_path"] = args.repo_path
+    config = dataclasses.replace(config, **overrides)
+    if not config.github_repo:
+        print("Error: --repo required (or GITHUB_REPO in .env)", file=sys.stderr)
+        return 2
+    try:
+        interval = parse_interval(args.every) if args.every else default_interval()
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    if args.parallel < 1:
+        print("Error: --parallel must be at least 1", file=sys.stderr)
+        return 2
+    options = WatchOptions(interval_s=interval, label=args.label.strip(),
+                           skip_label=args.skip_label.strip(),
+                           include_drafts=args.include_drafts,
+                           include_forks=args.include_forks, parallel=args.parallel,
+                           once=args.once, dashboard=args.dashboard)
+    return watch(config, options, setup_logging())
 
 
 def _feedback(args) -> int:
@@ -243,8 +303,6 @@ def _enrich(args) -> int:
 
 
 def _export(args) -> int:
-    import os
-
     from .enrich import parse_since
     from .export import export
     from .ledger import ledger_dir
@@ -287,6 +345,8 @@ def main() -> None:
     if args.command == "doctor":
         raise SystemExit(_doctor(args))
 
+    if args.command == "watch":
+        raise SystemExit(_watch(args))
     if args.command == "init-project":
         raise SystemExit(_init_project(args.name, [r.strip() for r in args.reviewers.split(",") if r.strip()]))
     if args.command == "projects":

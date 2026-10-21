@@ -199,7 +199,7 @@ def verify_findings(pr_number: int, pr_title: str, pr_diff: str, findings: list[
                      "verification", spec.id)
         return _pass_through(findings, {}, status="no_budget")
 
-    from .reviewer import invoke_cli, pick_model, write_diff
+    from .reviewer import UsageLimitError, invoke_cli, pick_model, write_diff
     label = f"{spec.id}/verif"
     max_turns = min(max(spec.verify_max_turns, TURNS_PER_FINDING * len(findings) + 3),
                     MAX_TURNS_CAP)
@@ -210,6 +210,8 @@ def verify_findings(pr_number: int, pr_title: str, pr_diff: str, findings: list[
                                 model=spec.verify_model or pick_model(spec),
                                 budget=remaining, label=label, timeout=TIMEOUT_S,
                                 reviewer_tools=False)
+    except UsageLimitError:
+        raise                       # the whole review is retried later, see run.py
     except Exception as e:
         _log.warning("[%s] verification impossible (%s) — findings posted without verification",
                      label, scrub_text(str(e))[:300])

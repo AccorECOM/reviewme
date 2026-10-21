@@ -32,6 +32,7 @@ from .projects import (
     select_reviewers,
 )
 from .reconciler import PreparedReview, load_pr_context, post_all, prepare
+from .reviewer import UsageLimitError
 from .reviewer import run_review as run_reviewer
 from .scrub import scrub_text
 from .state import is_reviewed, mark_error, mark_reviewed
@@ -252,7 +253,7 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
     title = pr.get("title", "")
     author = pr.get("user", {}).get("login", "")
 
-    if not force and is_reviewed(pr_number, head_sha):
+    if not force and is_reviewed(pr_number, head_sha, config.github_repo):
         logger.info("PR #%s already reviewed at %s, skip", pr_number, head_sha[:8])
         return {"skipped": True}
 
@@ -331,6 +332,10 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                 for fut in futures:
                     try:
                         outcomes.append(fut.result())
+                    except UsageLimitError:
+                        # Posting the other reviewers alone would mark the commit as
+                        # reviewed: the missing one would never run on it.
+                        raise
                     except Exception as e:
                         logger.error("PR #%s: reviewer failed: %s", pr_number, e)
 
@@ -418,13 +423,20 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                               counts.get("duration_ms", 0) or 0, diff_size_kb, logger)
 
         if not config.dry_run:
-            mark_reviewed(pr_number, head_sha, title, status="success")
+            mark_reviewed(pr_number, head_sha, title, status="success",
+                          repo=config.github_repo)
         logger.info("PR #%s: done %s", pr_number, counts,
                     extra={"pr_number": pr_number, "pr_title": title, "status": "success"})
         return counts
 
+    except UsageLimitError as e:
+        # Quota, not a defect of this commit: NOT marked as failed, so it is retried.
+        logger.warning("PR #%s: %s — the review will be retried", pr_number, e,
+                       extra={"pr_number": pr_number, "pr_title": title,
+                              "status": "usage_limit"})
+        return {"error": str(e), "usage_limit": True, "retry_at": e.retry_at}
     except Exception as e:
-        mark_error(pr_number, head_sha, title, str(e))
+        mark_error(pr_number, head_sha, title, str(e), repo=config.github_repo)
         logger.error("PR #%s: review failed: %s", pr_number, e,
                      extra={"pr_number": pr_number, "pr_title": title, "status": "error"})
         return {"error": str(e)}
