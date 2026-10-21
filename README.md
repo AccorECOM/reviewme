@@ -213,7 +213,7 @@ a Bitrise example in [`deploy/bitrise-step.md`](deploy/bitrise-step.md).
 ## Run it on your machine (watch mode)
 
 No CI needed: `reviewme watch` checks a repository's open PRs every few minutes and
-reviews each new commit. It calls the Claude Code CLI exactly as it is set up on the
+reviews each PR, again after every new push. It calls the Claude Code CLI exactly as it is set up on the
 machine: ReviewMe does not choose how the CLI reaches the model. If `claude -p "hello"`
 works in that terminal, watch works.
 
@@ -331,7 +331,7 @@ never instructions.
 | `reviewme export --since 7d --out DIR` | analysis archive and readable report |
 | `reviewme stats [--html F]` | counters and quality block |
 | `reviewme feedback --pr N` | developer replies, as rules to review |
-| `reviewme watch --repo O/R --every 10m` | poll the open PRs and review new commits (`--once`, `--dry-run`, `--label`) |
+| `reviewme watch --repo O/R --every 10m` | poll the open PRs and review each one (`--once`, `--dry-run`, `--label`) |
 | `reviewme-webhook` · `reviewme-poll` · `reviewme-web` | webhook server, poll loop (legacy name of watch), dashboard |
 
 | Variable | Purpose |

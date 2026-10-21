@@ -1,4 +1,4 @@
-"""Watch mode: poll a repository's open PRs and review the new commits, from any machine.
+"""Watch mode: poll a repository's open PRs and review each one, from any machine.
 
 `reviewme watch --repo OWNER/REPO --every 10m` runs anywhere the Claude Code CLI runs
 (a developer machine, a small server). How that CLI reaches the model is the machine's

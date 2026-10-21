@@ -4,7 +4,7 @@ It is the shared building block ("one PR, one review, then exit"), reused by the
 (called in a loop/cron), by a webhook, or by a CI step (Bitrise / GitHub Actions).
 
 Additional commands:
-  `reviewme watch --repo O/R --every 10m`  poll the open PRs and review new commits
+  `reviewme watch --repo O/R --every 10m`  poll the open PRs and review each one
   `reviewme init-project <repo>`  creates `config/projects/<repo>/` from the skeleton
   `reviewme projects`             lists projects and their reviewers
   `reviewme enrich --since 14d`   what happened to posted comments (👍/👎, replies, follow-up)
@@ -39,7 +39,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--force", action="store_true", help="Re-review even if already done for this commit")
         p.add_argument("--dry-run", action="store_true", help="Post nothing, log only")
 
-    wa = sub.add_parser("watch", help="Poll the open PRs and review new commits (local loop)",
+    wa = sub.add_parser("watch", help="Poll the open PRs and review each one (local loop)",
                         description="Every N minutes, list the repo's open PRs and review "
                         "the commits not reviewed yet, each in its own git worktree. Meant "
                         "for a machine where the Claude Code CLI is logged in.")
