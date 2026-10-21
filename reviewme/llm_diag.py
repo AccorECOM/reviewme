@@ -53,10 +53,23 @@ def gateway_host(env: Mapping[str, str]) -> str:
     return urlparse(base).netloc or base
 
 
+def request_path(env: Mapping[str, str]) -> str:
+    """Path the CLI will POST to (base path + /v1/messages), without scheme or host.
+
+    A CI usually masks the exact value of a secret, so the full ANTHROPIC_BASE_URL prints as
+    [REDACTED]; the path alone is not the secret and shows a doubled `/v1` or a missing
+    gateway prefix, which the gateway answers with 404 (and the CLI reports as an
+    "unrecognized model").
+    """
+    base = (env.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com").strip()
+    path = urlparse(base).path.rstrip("/")
+    return f"{path}/v1/messages"
+
+
 def describe_env(env: Mapping[str, str] | None = None) -> list[str]:
     """One line per fact. Nothing in them can be replayed against the gateway."""
     env = os.environ if env is None else env
-    lines = [f"gateway host: {gateway_host(env)}"]
+    lines = [f"gateway host: {gateway_host(env)}", f"request path: {request_path(env)}"]
     for name in _CREDENTIALS:
         lines.append(f"{name}: {fingerprint(env.get(name) or '')}")
     both = all(env.get(n) for n in _CREDENTIALS)
@@ -109,13 +122,16 @@ def probe(env: Mapping[str, str] | None = None, model: str = "") -> list[str]:
     common = {"anthropic-version": "2023-06-01", "content-type": "application/json"}
     custom = custom_headers(env)
     common.update(custom)
-    lines = [f"probe: POST {base.rstrip('/')}/v1/messages model={model} max_tokens=1"
+    lines = [f"probe: POST {gateway_host(env)}{request_path(env)} model={model} max_tokens=1"
              + (f" custom headers: {', '.join(custom)}" if custom else "")]
     token = env.get("ANTHROPIC_AUTH_TOKEN") or ""
     key = env.get("ANTHROPIC_API_KEY") or ""
     if token:
         status, body = _probe_once(base, {**common, "Authorization": f"Bearer {token}"}, model)
         lines.append(f"  Authorization: Bearer <ANTHROPIC_AUTH_TOKEN> -> {status} {body}")
+        if status == "404":
+            lines.append("  404 = no route at this path: check ANTHROPIC_BASE_URL (no trailing /v1). "
+                         "The CLI reports this as an unrecognized model.")
     if key:
         status, body = _probe_once(base, {**common, "x-api-key": key}, model)
         lines.append(f"  x-api-key: <ANTHROPIC_API_KEY> -> {status} {body}")

@@ -90,3 +90,8 @@ def test_report_is_framed_and_leaks_nothing():
     assert lines[0] == lines[2] == lines[-1] == llm_diag.BANNER_START
     assert lines[1] == llm_diag.BANNER_TITLE
     assert TOKEN not in "\n".join(lines)
+
+
+def test_request_path_shows_doubled_v1():
+    assert llm_diag.request_path({"ANTHROPIC_BASE_URL": "https://gw.example/llm"}) == "/llm/v1/messages"
+    assert llm_diag.request_path({"ANTHROPIC_BASE_URL": "https://gw.example/llm/v1/"}) == "/llm/v1/v1/messages"
