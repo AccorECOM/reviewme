@@ -141,6 +141,15 @@ class GitHubClient:
             page += 1
         return comments
 
+    def list_review_comments_of_review(self, pr_number: int, review_id: int) -> list[dict]:
+        """Commentaires d'UNE review (pour rattacher leurs ids aux findings postés)."""
+        resp = self._request(
+            "GET", f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/reviews/{review_id}/comments",
+            params={"per_page": 100},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def list_issue_comments(self, pr_number: int) -> list[dict]:
         """Commentaires globaux (issue comments) de la PR, paginés.
 

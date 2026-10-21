@@ -39,5 +39,5 @@ archive/
 .claude/
 docs/archive/
 config/guidelines/ios/
-deploy/bitrise-ah-ios.yml
+deploy/bitrise-*.yml
 docs/ADR-*.md

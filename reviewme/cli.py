@@ -34,7 +34,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         p.add_argument("--dry-run", action="store_true", help="Ne poste rien, log seulement")
 
     ip = sub.add_parser("init-project", help="Crée un dossier de projet depuis le squelette")
-    ip.add_argument("name", help="Nom du dossier = nom du REPO (ex. ah-ios), jamais celui de l'équipe")
+    ip.add_argument("name", help="Nom du dossier = nom du REPO (ex. mon-app), jamais celui de l'équipe")
     ip.add_argument("--reviewers", default="tech",
                     help="Reviewers à copier, séparés par des virgules (défaut : tech)")
 

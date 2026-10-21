@@ -32,7 +32,7 @@ stack par défaut est macOS :
 
             # 1. Outils, en versions ÉPINGLÉES et vérifiées — ce job porte des secrets.
             npm install -g "@anthropic-ai/claude-code@<version>"   # npm vérifie l'intégrité
-            # uv : archive de release + SHA256 publié par l'éditeur (voir bitrise-ah-ios.yml)
+            # uv : archive de release + SHA256 publié par l'éditeur (voir le bitrise.yml de votre application)
             export PATH="$HOME/.local/bin:$PATH"
             echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
 

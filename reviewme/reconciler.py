@@ -192,6 +192,7 @@ class PreparedReview:
     global_update_id: int | None = None     # commentaire global existant à mettre à jour
     threads_resolus: set = field(default_factory=set)   # évite de répondre deux fois
     counts: dict = field(default_factory=dict)
+    findings: list = field(default_factory=list)        # tous les findings, avec leur `fate`
 
 
 def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
@@ -202,7 +203,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
     head_sha = pr["head"]["sha"]
     counts = {"posted": 0, "replied": 0, "deduped": 0, "out_of_diff": 0,
               "invalid": 0, "dropped_low": 0, "capped": 0, "resolus": 0, "fallback": False}
-    prep = PreparedReview(reviewer_id=reviewer_id, output_mode=output_mode, counts=counts)
+    prep = PreparedReview(reviewer_id=reviewer_id, output_mode=output_mode, counts=counts,
+                          findings=list(result.findings))
 
     # --- Repli : JSON inexploitable -> commentaire global ---
     if not result.parsed_ok:
@@ -218,13 +220,19 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
     inline: list = []
     out_of_diff: list = []
     for f in result.findings:
-        if f.confidence < config.confidence_threshold:
-            counts["dropped_low"] += 1
-            continue
         fmap = ctx.valid.get(f.path, {})
         resolved = resolve_line(fmap, f.line, f.snippet) if fmap else None
+        if f.confidence < config.confidence_threshold:
+            counts["dropped_low"] += 1
+            f.fate = "dropped_low"
+            # Ancré quand même : le registre doit pouvoir dire si un humain a commenté la
+            # ligne que le seuil a fait taire — c'est le coût du seuil en rappel.
+            if resolved is not None:
+                f.line, f.line_content = resolved
+            continue
         if resolved is None:
             f.valid = False
+            f.fate, f.in_summary = "out_of_diff", True
             out_of_diff.append(f)
             counts["out_of_diff"] += 1
         else:
@@ -242,6 +250,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         existing = ctx.global_by_marker.get(marker_key(marker))
         prep.global_body = f"{prep.summary}\n\n{marker}"
         prep.global_update_id = existing.get("id") if existing else None
+        for f in inline:
+            f.fate, f.in_summary = "posted", True
         return prep
 
     # --- Réconciliation inline ---
@@ -251,12 +261,17 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         # même ligne sans s'annuler l'un l'autre (ADR v3 D3).
         existing = ctx.inline_by_marker.get((reviewer_id, fingerprint_hash(f.path, f.line_content)))
         if existing is None:
+            f.fate = "posted"
             prep.batch.append({
                 "path": f.path, "line": f.line, "side": "RIGHT",
                 "body": _guard(_comment_body(f, marker, prefix), logger, pr_number),
                 "_severity": f.severity, "_confidence": f.confidence, "_reviewer": reviewer_id,
+                "_finding": f,
             })
-        elif existing.get("position") is None:
+            continue
+        # Déjà commenté : le finding est rattaché au commentaire existant.
+        f.fate, f.comment_id = "deduped", existing.get("id")
+        if existing.get("position") is None:
             # finding toujours là mais commentaire devenu outdated -> répondre dans le thread
             prep.replies.append((existing["id"],
                                  f"Toujours d'actualité sur `{head_sha[:8]}` "
@@ -304,12 +319,38 @@ def _apply_cap(prepared: list[PreparedReview], cap: int, logger: logging.Logger,
 
     items.sort(key=lambda c: (_SEV_RANK.get(c["_severity"], 3), -c["_confidence"]))
     kept, dropped = items[:cap], items[cap:]
+    for c in dropped:
+        if c.get("_finding") is not None:
+            c["_finding"].fate = "capped"
     for p in prepared:
         p.counts["capped"] = sum(1 for c in dropped if c["_reviewer"] == p.reviewer_id)
     logger.info("PR #%s : plafond de %d commentaires atteint, %d finding(s) non postés : %s",
                 pr_number, cap, len(dropped),
                 ", ".join(f"{c['_reviewer']}:{c['path']}:{c['line']}" for c in dropped))
     return kept
+
+
+def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: list[dict],
+                        logger: logging.Logger) -> None:
+    """Rattache à chaque finding posté l'id de son commentaire (pour le registre).
+
+    `create_review` ne renvoie que la review : on relit ses commentaires et on les apparie
+    par marqueur. Best-effort : un échec ne touche que le registre, jamais la PR.
+    """
+    par_marqueur = {marker_key(c["body"]): c["_finding"] for c in batch
+                    if c.get("_finding") is not None}
+    if not par_marqueur or not (review or {}).get("id"):
+        return
+    try:
+        commentaires = gh.list_review_comments_of_review(pr_number, review["id"])
+    except Exception as e:
+        logger.info("PR #%s : ids des commentaires postés non relus (%s) — registre incomplet",
+                    pr_number, type(e).__name__)
+        return
+    for c in commentaires:
+        f = par_marqueur.get(marker_key(c.get("body", "")))
+        if f is not None:
+            f.comment_id = c.get("id")
 
 
 def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[PreparedReview],
@@ -357,14 +398,19 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
     if batch:
         api_batch = [_api_comment(c) for c in batch]
         try:
-            gh.create_review(pr_number, head_sha, summary_body, api_batch, event="COMMENT")
+            review = gh.create_review(pr_number, head_sha, summary_body, api_batch, event="COMMENT")
             totals["posted_inline"] = len(api_batch)
             totals["posted"] = len(api_batch)
+            _attach_comment_ids(gh, pr_number, review, batch, logger)
         except GitHubApiError as e:
             if e.status_code == 422:
                 logger.warning("PR #%s : 422 sur le batch review, repli commentaire global", pr_number)
-                gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch),
-                                                        logger, pr_number))
+                repli = gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch),
+                                                                logger, pr_number))
+                for c in batch:
+                    if c.get("_finding") is not None:
+                        c["_finding"].in_summary = True
+                        c["_finding"].comment_id = (repli or {}).get("id")
                 totals["fallback"] = True
             else:
                 raise
@@ -379,9 +425,12 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
         body = _guard(p.global_body, logger, pr_number)
         try:
             if p.global_update_id:
-                gh.update_issue_comment(p.global_update_id, body)
+                posted = gh.update_issue_comment(p.global_update_id, body)
             else:
-                gh.post_issue_comment(pr_number, body)
+                posted = gh.post_issue_comment(pr_number, body)
+            for f in p.findings:
+                if f.fate == "posted" and f.in_summary:
+                    f.comment_id = (posted or {}).get("id")
             totals["posted_global"] += 1
             totals["posted"] += 1
         except GitHubApiError:

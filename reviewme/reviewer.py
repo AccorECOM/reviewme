@@ -40,6 +40,7 @@ _ALLOWED_TOOLS = "Read,Glob,Grep,Bash(git log:*),Bash(git show:*),Bash(git diff:
 # arbitraire que `_load_instance_env` et le confinement du precheck ont fermée.
 # Pour faire varier le modèle selon la tâche : créer un reviewer de plus avec son `model`.
 _TIMEOUT_S = 900
+_MAX_TURNS = 30
 
 
 def _find_claude(config: Config | None = None) -> str:
@@ -154,7 +155,7 @@ def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
             _find_claude(config),
             "-p", prompt,
             "--output-format", "json",
-            "--max-turns", "30",
+            "--max-turns", str(_MAX_TURNS),
             "--allowedTools", _ALLOWED_TOOLS,
         ]
         # Persona : auto-suffisant via system.md par défaut ; --agent seulement si configuré
@@ -213,6 +214,11 @@ def run_review(pr_number: int, pr_title: str, pr_diff: str, config: Config,
                     "output_tokens": usage.get("output_tokens", 0),
                     "cache_read_tokens": cache_read,
                     "cache_create_tokens": cache_create,
+                    "max_turns": _MAX_TURNS,
+                    # `success`, `error_max_turns`, `error_during_execution`… : dit si la
+                    # review est allée au bout, ce qu'aucun compteur ne montre sinon.
+                    "subtype": data.get("subtype") or "",
+                    "is_error": bool(data.get("is_error")),
                 }
                 # Champs de l'enveloppe qu'on ne gardait pas et qui disent si le run
                 # s'est REELLEMENT bien passé. `subtype` distingue un succès d'un arrêt

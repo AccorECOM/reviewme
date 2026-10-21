@@ -49,9 +49,15 @@ class Finding:
     confidence: int = 0
     suggestion: str | None = None
     side: str = "RIGHT"           # v1 : RIGHT uniquement
+    severity_raw: str = ""        # sévérité telle qu'écrite par le modèle, avant `coerce`
+    evidence: str = ""            # preuve citée par le modèle (optionnelle)
     # calculés au runtime :
     valid: bool = False            # renseigné par la validation contre le diff
     line_content: str = ""        # contenu réel de la ligne (source du fingerprint)
+    # devenir du finding, pour le registre (`ledger.py`) — jamais pour le posting :
+    fate: str = ""                # posted | dropped_low | out_of_diff | capped | deduped
+    in_summary: bool = False       # délivré dans le résumé plutôt qu'en inline
+    comment_id: int | None = None  # commentaire GitHub qui le porte, une fois posté
 
     def title(self) -> str:
         base = self.message.strip().splitlines()[0] if self.message.strip() else "(sans titre)"
@@ -66,6 +72,7 @@ class ReviewResult:
     raw: str = ""                 # sortie brute (pour le fallback)
     metadata: dict = field(default_factory=dict)
     parsed_ok: bool = True         # False -> l'appelant doit fallback en commentaire global
+    invalid: int = 0               # findings rejetés au parsing (sans `path`/`line` exploitable)
 
 
 def _extract_json_blob(text: str) -> str | None:
@@ -100,16 +107,20 @@ def parse_review_output(text: str, metadata: dict | None = None) -> ReviewResult
                             metadata=metadata, parsed_ok=False)
 
     findings: list[Finding] = []
+    invalid = 0
     for item in data.get("findings", []) or []:
         if not isinstance(item, dict):
+            invalid += 1
             continue
         path = str(item.get("path", "")).strip()
         line_raw = item.get("line")
         try:
             line = int(line_raw)
         except (TypeError, ValueError):
+            invalid += 1
             continue  # un finding sans ligne exploitable ne peut pas être inline
         if not path or line <= 0:
+            invalid += 1
             continue
         findings.append(
             Finding(
@@ -121,6 +132,8 @@ def parse_review_output(text: str, metadata: dict | None = None) -> ReviewResult
                 rule_id=str(item.get("rule_id", "")).strip(),
                 confidence=_coerce_int(item.get("confidence"), default=0),
                 suggestion=(str(item["suggestion"]).strip() if item.get("suggestion") else None),
+                severity_raw=str(item.get("severity", "")).strip(),
+                evidence=str(item.get("evidence", "") or "").strip(),
             )
         )
 
@@ -131,6 +144,7 @@ def parse_review_output(text: str, metadata: dict | None = None) -> ReviewResult
         raw=raw,
         metadata=metadata,
         parsed_ok=True,
+        invalid=invalid,
     )
 
 

@@ -39,8 +39,14 @@ def _safe_join(root: Path, rel: str) -> Path | None:
     return target
 
 
-def build_repo_context(spec, repo_path: str, logger: logging.Logger) -> str:
-    """Bloc de conventions à injecter dans le prompt, ou "" si le reviewer n'en déclare pas."""
+def build_repo_context(spec, repo_path: str, logger: logging.Logger,
+                       sources: list[dict] | None = None) -> str:
+    """Bloc de conventions à injecter dans le prompt, ou "" si le reviewer n'en déclare pas.
+
+    `sources`, s'il est fourni, reçoit une entrée par fichier réellement injecté (chemin,
+    octets, tronqué ou non) : c'est ce qui permet au registre de dire quel contexte le
+    reviewer a VRAIMENT vu, et pas seulement ce qu'on lui a déclaré.
+    """
     if not spec.context_read:
         return ""
 
@@ -78,12 +84,17 @@ def build_repo_context(spec, repo_path: str, logger: logging.Logger) -> str:
             logger.warning("[%s] context.read : lecture impossible de %s (%s)", spec.id, rel, e)
             continue
 
-        if len(text) > MAX_FILE_BYTES:
+        taille = len(text)
+        tronque = taille > MAX_FILE_BYTES
+        if tronque:
             text = text[:MAX_FILE_BYTES] + "\n\n_(tronqué — ouvre le fichier pour la suite)_"
         if len(text) > budget:
             logger.info("[%s] context.read : budget atteint, %s non injecté", spec.id, rel)
             continue
         budget -= len(text)
+        if sources is not None:
+            sources.append({"path": rel, "bytes": taille, "truncated": tronque,
+                            "source": "context.read"})
         parts.append(f"### `{rel}`\n{text}")
 
     if missing:

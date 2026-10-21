@@ -100,6 +100,8 @@ class ProjectConfig:
     directory: Path | None
     reviewers: tuple[ReviewerSpec, ...] = field(default_factory=tuple)
     simple: bool = False                   # True = projet virtuel du mode simple
+    ledger_include_text: bool = False      # `[ledger] include_text` du project.toml : le
+                                           # registre garde-t-il le texte des remarques ?
 
     def reviewer(self, reviewer_id: str) -> ReviewerSpec | None:
         return next((r for r in self.reviewers if r.id == reviewer_id), None)
@@ -228,7 +230,12 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
         raise ProjectConfigError(
             f"projet '{name}' : tous les reviewers sont désactivés (`enabled = false`)")
 
-    return ProjectConfig(name=name, directory=pdir, reviewers=active)
+    # Réglages du PROJET (et non d'un reviewer), optionnels.
+    settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
+    ledger = settings.get("ledger", {}) or {}
+
+    return ProjectConfig(name=name, directory=pdir, reviewers=active,
+                         ledger_include_text=bool(ledger.get("include_text", False)))
 
 
 def _simple_project(config: Config) -> ProjectConfig:

@@ -67,14 +67,19 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
         ensure_plugins(spec, _find_claude(config), logger)
 
     blocks = [context[k] for k in spec.requires if k in context]
+    # Ce que le reviewer a réellement reçu, pour le registre (`runs.jsonl`).
+    sources: list[dict] = [{"path": k, "bytes": len(context[k]), "truncated": False,
+                            "source": "context"} for k in spec.requires if k in context]
 
     # Ce qui a déjà été dit sur cette PR, et ce qu'on y a répondu.
     if historique:
         blocks.append(historique)
+        sources.append({"path": "historique", "bytes": len(historique), "truncated": False,
+                        "source": "historique"})
 
     # Conventions du dépôt : déclarées dans reviewer.toml, lues à la source (D13).
     from .repo_context import build_repo_context
-    conventions = build_repo_context(spec, config.repo_path, logger)
+    conventions = build_repo_context(spec, config.repo_path, logger, sources)
     if conventions:
         blocks.append(conventions)
 
@@ -87,8 +92,11 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
         facts = run_precheck(spec, config, logger, diff)
         if facts:
             extra = f"{extra}\n\n{facts}" if extra else facts
+            sources.append({"path": spec.precheck, "bytes": len(facts),
+                            "truncated": "_(sortie tronquée)_" in facts, "source": "precheck"})
 
     result = run_reviewer(pr_number, title, diff, config, spec=spec, extra_context=extra)
+    result.metadata["context_files"] = sources
     logger.info("PR #%s [%s] : %d findings, parsed=%s, modèle=%s, coût $%.4f",
                 pr_number, spec.id, len(result.findings), result.parsed_ok,
                 result.metadata.get("model", "?"), result.metadata.get("cost_usd", 0))
@@ -197,6 +205,12 @@ def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logge
         ]
         counts = post_all(pr, config, gh, prepared, logger)
         counts["cost_usd"] = round(total_cost, 4)
+
+        # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après
+        # `post_all`, qui fixe les sorts `capped` et les ids des commentaires postés.
+        from .ledger import record as enregistrer_registre
+        counts["run_id"] = enregistrer_registre(pr, config, project, prepared, outcomes,
+                                                diff, logger)
         counts.update(engagement)
 
         findings_total = sum(len(r.findings) for _, r in outcomes)
