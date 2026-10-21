@@ -93,6 +93,11 @@ instructions = "Les services métier sont dans src/services ; pas d'appel résea
 # model = "…"   max_turns = 50   priority = 10   enabled = false
 ```
 
+**Laisser une IA le faire** : le skill [`skills/reviewme-creer-relecteur`](skills/reviewme-creer-relecteur/SKILL.md)
+guide Claude Code pour explorer le dépôt, choisir entre adapter un relecteur du core et en
+créer un, écrire une persona courte et valider la config. Copiez-le dans `.claude/skills/`
+du projet, puis demandez par exemple « ajoute un relecteur qui vérifie nos migrations ».
+
 ### Relecteurs custom : un dossier dans le projet
 
 Pour ce qui est propre à **votre** code, un relecteur est un dossier sous

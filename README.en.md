@@ -92,6 +92,12 @@ instructions = "Business services live in src/services; no network calls from vi
 # model = "…"   max_turns = 50   priority = 10   enabled = false
 ```
 
+**Let an AI do it**: the [`skills/reviewme-creer-relecteur`](skills/reviewme-creer-relecteur/SKILL.md)
+skill (French) guides Claude Code to explore the repository, choose between adapting a
+core reviewer and creating one, write a short persona and validate the config. Copy it into
+the project's `.claude/skills/`, then ask for instance "add a reviewer that checks our
+migrations".
+
 ### Custom reviewers: a folder in the project
 
 For what is specific to **your** code, a reviewer is a folder under
