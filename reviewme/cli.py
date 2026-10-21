@@ -6,6 +6,8 @@ C'est la brique commune (« une PR, une review, puis on sort »), réutilisée p
 Commandes annexes :
   `reviewme init-project <repo>`  crée `config/projects/<repo>/` depuis le squelette
   `reviewme projects`             liste les projets et leurs reviewers
+  `reviewme enrich --since 14d`   devenir des remarques postées (👍/👎, réponses, suivi d'effet)
+  `reviewme export --since 7d`    archive d'analyse + rapport lisible (cf. `export.py`)
 """
 from __future__ import annotations
 
@@ -49,6 +51,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     st.add_argument("--html", metavar="FICHIER",
                     help="Écrit un rapport HTML autonome au lieu d'afficher le résumé")
     st.add_argument("--json", action="store_true", help="Sortie JSON brute")
+
+    en = sub.add_parser("enrich", help="Devenir des remarques postées (lecture seule GitHub)")
+    en.add_argument("--since", default="14d", help="Fenêtre, ex. 14d ou 36h (défaut : 14d)")
+    en.add_argument("--pr", dest="en_pr", type=int, help="Une seule PR")
+    en.add_argument("--repo", dest="en_repo", help="OWNER/REPO (sinon GITHUB_REPO)")
+
+    ex = sub.add_parser("export", help="Archive d'analyse (JSONL) + rapport-semaine.md")
+    ex.add_argument("--since", default="7d", help="Fenêtre, ex. 7d (défaut : 7d)")
+    ex.add_argument("--out", required=True, help="Dossier de sortie")
+    ex.add_argument("--repo", dest="ex_repo", help="OWNER/REPO, pour les liens du rapport")
     return parser.parse_args(argv)
 
 
@@ -165,12 +177,78 @@ def _stats(args) -> int:
 
     if not r.get("runs"):
         print("Aucune review enregistrée.")
+        _print_quality()
         return 0
     print(f"{r['runs']} run(s) sur {r['prs']} PR")
     print(f"  remarques postées      : {r['remarques_postees']}")
     print(f"  évitées (dédup+seuil)  : {r['remarques_dedupliquees'] + r['remarques_sous_seuil']}")
     print(f"  coût total             : {r['cout_total_usd']:.2f} $")
     print(f"  coût moyen par PR      : {r['cout_moyen_par_pr']:.2f} $")
+    _print_quality()
+    return 0
+
+
+def _print_quality() -> None:
+    """Bloc qualité, séparé des compteurs d'exploitation. Rien si le registre est vide."""
+    from .export import load, quality_of
+    from .ledger import ledger_dir
+
+    q = quality_of(load(ledger_dir()))
+    if not q["posted_judged"] and not any(c["findings"] for c in q["calibration"].values()):
+        return
+    print("\nQualité (registre enrichi) :")
+    for rid, t in q["by_reviewer"].items():
+        taux = "—" if t["followed_rate"] is None else f"{round(t['followed_rate'] * 100)} %"
+        print(f"  {rid:<12} postées {t['posted']:>3}  suivies d'effet {taux:>5}  "
+              f"approuvées {t['approved']:>3}  contestées {t['contested']:>3}")
+    print("  calibration (findings / postés / suivis) :")
+    for b, c in q["calibration"].items():
+        print(f"    {b:>7} : {c['findings']:>4} / {c['fates'].get('posted', 0):>4} / "
+              f"{c['followed']:>4}")
+    m = q["misses"]
+    print(f"  manqués approchés : {m['on_silent_lines']} ligne(s) muette(s), "
+          f"{m['on_dropped_findings']} sur finding écarté")
+
+
+def _enrich(args) -> int:
+    from .enrich import enrich, parse_since
+    from .github_client import GitHubClient
+    from .ledger import include_text, ledger_dir
+    from .projects import ProjectConfigError, resolve_project
+
+    config = load_config(require_repo=False)
+    if args.en_repo:
+        config = dataclasses.replace(config, github_repo=args.en_repo)
+    if not config.github_repo:
+        print("Erreur : --repo requis (ou GITHUB_REPO dans .env)", file=sys.stderr)
+        return 2
+    try:
+        with_text = include_text(resolve_project(config))
+    except ProjectConfigError:
+        with_text = include_text(None)
+    logger = setup_logging()
+    gh = GitHubClient(config)
+    try:
+        r = enrich(gh, ledger_dir(config), parse_since(args.since), logger,
+                   with_text=with_text, only_pr=args.en_pr)
+    finally:
+        gh.close()
+    print(f"{r['prs']} PR, {r['comments']} commentaire(s) suivi(s).")
+    return 0
+
+
+def _export(args) -> int:
+    import os
+
+    from .enrich import parse_since
+    from .export import export
+    from .ledger import ledger_dir
+
+    repo = args.ex_repo or os.environ.get("GITHUB_REPO", "")
+    archive, rapport = export(ledger_dir(), Path(args.out), parse_since(args.since),
+                              repo=repo, since_label=f"({args.since})")
+    print(f"Archive : {archive}")
+    print(f"Rapport : {rapport}")
     return 0
 
 
@@ -185,6 +263,10 @@ def main() -> None:
         raise SystemExit(_stats(args))
     if args.command == "feedback":
         raise SystemExit(_feedback(args))
+    if args.command == "enrich":
+        raise SystemExit(_enrich(args))
+    if args.command == "export":
+        raise SystemExit(_export(args))
 
     if args.pr is None:
         print("Usage : reviewme review --repo OWNER/REPO --pr N [--dry-run] [--force]", file=sys.stderr)

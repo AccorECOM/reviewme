@@ -171,6 +171,70 @@ class GitHubClient:
             page += 1
         return comments
 
+    # ------------------------------------------------------------------ devenir des remarques
+    # Lecture seule, pour `reviewme enrich` : ce qu'il est advenu des commentaires du bot.
+
+    def list_comment_reactions(self, comment_id: int) -> list[dict]:
+        """Réactions (👍, 👎…) sur un commentaire de review."""
+        resp = self._request(
+            "GET", f"{API_BASE}/repos/{self._repo}/pulls/comments/{comment_id}/reactions",
+            params={"per_page": 100},
+        )
+        if resp.status_code == 404:
+            return []                      # commentaire supprimé depuis
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_pr_commits(self, pr_number: int) -> list[dict]:
+        """Commits de la PR, du plus ancien au plus récent (250 au plus, limite de l'API)."""
+        commits: list[dict] = []
+        page = 1
+        while page <= 3:
+            resp = self._request(
+                "GET", f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/commits",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            commits.extend(batch)
+            page += 1
+        return commits
+
+    def get_file_at(self, path: str, ref: str) -> str | None:
+        """Contenu brut d'un fichier à un commit, ou None s'il n'existe pas (supprimé)."""
+        resp = self._request(
+            "GET", f"{API_BASE}/repos/{self._repo}/contents/{path}",
+            params={"ref": ref},
+            headers={**self._config.api_headers, "Accept": "application/vnd.github.raw"},
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.text
+
+    def get_permission(self, login: str) -> str:
+        """Droit d'un utilisateur sur le dépôt (`admin`, `write`, `read`, `none`)."""
+        resp = self._request(
+            "GET", f"{API_BASE}/repos/{self._repo}/collaborators/{login}/permission")
+        if resp.status_code >= 400:
+            return "none"
+        return resp.json().get("permission", "none")
+
+    def review_threads(self, pr_number: int) -> list[dict]:
+        """Fils de review (résolus ou non) via GraphQL — l'API REST ne l'expose pas."""
+        owner, name = self._repo.split("/")
+        query = """query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){
+          pullRequest(number:$pr){reviewThreads(first:100){nodes{isResolved
+          resolvedBy{login} comments(first:1){nodes{databaseId}}}}}}}"""
+        resp = self._request("POST", f"{API_BASE}/graphql", json={
+            "query": query, "variables": {"o": owner, "n": name, "pr": pr_number}})
+        resp.raise_for_status()
+        data = resp.json()
+        pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+        return ((pr.get("reviewThreads") or {}).get("nodes")) or []
+
     # ------------------------------------------------------------------ écriture
     def post_issue_comment(self, pr_number: int, body: str) -> dict:
         """Commentaire global (issue comment) — chemin de repli quand l'inline est impossible."""

@@ -199,6 +199,8 @@ PR ──► sélection des reviewers (activés par le projet, déclenchés par 
 | `reviewme init-project <repo> --reviewers tech,us` | Crée un projet depuis le squelette |
 | `reviewme stats [--json\|--html <fichier>]` | Compteurs agrégés, ou rapport HTML autonome |
 | `reviewme feedback --pr N` | Retours des développeurs, en règles attribuées à relire |
+| `reviewme enrich --since 14d` | Devenir des remarques postées : 👍/👎, réponses, suivi d'effet, manqués |
+| `reviewme export --since 7d --out DIR` | Archive d'analyse (JSONL + `quality.json`) et `rapport-semaine.md` |
 | `reviewme-poll` | Boucle de poll (VPS) |
 | `reviewme-webhook` | Serveur webhook GitHub (HMAC obligatoire) |
 | `reviewme-web` | Dashboard read-only sur `127.0.0.1:8420` |
@@ -235,6 +237,33 @@ sortent de toute façon sans rien activer : les refus d'outil liés à l'allowli
 plafond de tours déguisé en succès, une sortie non-JSON de la CLI, et une réponse hors
 contrat avec le début de ce que l'agent a écrit. Le prompt n'est jamais journalisé, seulement
 sa taille.
+
+### Mesurer la qualité
+
+Chaque run écrit dans `data/ledger/` une ligne par finding, **posté ou non**, avec son
+sort (`posted`, `dropped_low`, `out_of_diff`, `capped`, `deduped`, `invalid`) et sa
+confiance, plus une ligne par reviewer (modèle réel, tours, coût, contexte injecté). Un
+run simulé écrit dans `data/ledger-simule/`, à part.
+
+`reviewme enrich`, lancé chaque nuit, relève ce qu'il est advenu des remarques : la ligne
+a-t-elle disparu (suivi d'effet), 👍/👎, réponses, fils résolus, commentaires humains
+voisins. `reviewme stats` y ajoute un bloc qualité (précision approchée par reviewer,
+calibration par tranche de confiance, manqués) et `reviewme export` produit l'archive à
+analyser. Le schéma est décrit dans [`docs/registre-schema.md`](docs/registre-schema.md).
+
+Le texte des remarques n'est écrit que si le projet le demande, dans son `project.toml` :
+
+```toml
+[ledger]
+include_text = true
+```
+
+| Variable | Rôle |
+|---|---|
+| `REVIEWME_LEDGER_DIR` | Dossier du registre (défaut `data/ledger/`) |
+| `REVIEWME_LEDGER_VARIANT` | `live` (défaut) ou `baseline` pour une chaîne témoin en `--dry-run` |
+| `REVIEWME_LEDGER_INCLUDE_TEXT` | Force `include_text` (prime sur `project.toml`) |
+| `REVIEWME_ENGINE_COMMIT` | Commit du moteur, quand le checkout n'a pas de `.git` |
 
 ## Sécurité
 
