@@ -49,7 +49,9 @@ def _verdict(e: dict | None) -> dict:
     fixed_reply = any(r.get("label") == "fixed" for r in replies)
     return {
         "followed": bool(e.get("fingerprint_gone_at")) or fixed_reply,
-        "approved": (reactions["+1"] > 0 or (bool(replies) and not contested)) and not contested,
+        # Approuvée = signal POSITIF explicite (👍 ou « corrigé ») ; une question ou une
+        # réponse neutre n'approuve rien.
+        "approved": (reactions["+1"] > 0 or fixed_reply) and not contested,
         "contested": contested,
         "answered": bool(replies) or bool(reactions),
     }
@@ -73,12 +75,28 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
     last_enrich = latest(enrich, "comment_id")
     last_pr = latest(prs, "pr")
 
-    # Une remarque postée = un comment_id ; on garde sa première apparition.
+    # Une remarque postée EN LIGNE = un comment_id ; on garde sa première apparition. Les
+    # findings délivrés dans un commentaire global (mode `global`, repli 422) n'ont pas de
+    # ligne à suivre : comptés à part, jamais dans le dénominateur de précision.
     posted: dict = {}
+    in_summary = 0
     for f in live:
-        if f.get("fate") == "posted" and f.get("comment_id") and not f.get("dry_run"):
+        if f.get("fate") != "posted" or f.get("dry_run"):
+            continue
+        if f.get("in_summary"):
+            in_summary += 1
+        elif f.get("comment_id"):
             posted.setdefault(f["comment_id"], f)
     judged = [{**f, **_verdict(last_enrich.get(cid))} for cid, f in posted.items()]
+
+    # Calibration : chaque finding UNE fois — sa première apparition sur la PR. Sans ça,
+    # un finding re-produit à chaque push pèserait autant de fois qu'il y a de commits.
+    first_seen: dict = {}
+    for f in sorted(live, key=lambda f: f.get("ts", "")):
+        key = (f.get("pr"), f.get("reviewer"),
+               f.get("fingerprint") or f"{f.get('path')}:{f.get('line')}:{f.get('run_id')}")
+        first_seen.setdefault(key, f)
+    unique = list(first_seen.values())
 
     by_reviewer: dict[str, list] = defaultdict(list)
     by_rule: dict[str, list] = defaultdict(list)
@@ -94,9 +112,11 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
     calibration = {}
     for lo, hi in BANDS:
         key = f"{lo}-{hi}"
-        in_band = [f for f in live if band(f.get("confidence", 0)) == key]
-        calibration[key] = {"findings": len(in_band),
-                            "fates": dict(Counter(f.get("fate") for f in in_band)),
+        in_band = [f for f in unique if band(f.get("confidence", 0)) == key]
+        # En dry-run, « posted » veut dire « aurait été posté » : on le dit.
+        fates = Counter("would_post" if f.get("dry_run") and f.get("fate") == "posted"
+                        else f.get("fate") for f in in_band)
+        calibration[key] = {"findings": len(in_band), "fates": dict(fates),
                             **{k: v for k, v in _tally(by_band.get(key, [])).items()}}
 
     contested_rules = sorted(
@@ -107,7 +127,7 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
 
     remembered = [
         {"pr": e.get("pr"), "comment_id": e.get("comment_id"), "user": r.get("user"),
-         "rule": r["remember"]["rule"], "trusted": r["remember"].get("trusted", False)}
+         "rule": r["remember"].get("rule"), "trusted": r["remember"].get("trusted", False)}
         for e in last_enrich.values() for r in e.get("replies", []) if r.get("remember")]
 
     misses = {
@@ -174,6 +194,7 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
 
     return {
         "posted_judged": len(judged),
+        "posted_in_summary": in_summary,
         "by_reviewer": {k: _tally(v) for k, v in sorted(by_reviewer.items())},
         "by_rule": {k: _tally(v) for k, v in sorted(by_rule.items())},
         "by_severity": {k: _tally(v) for k, v in sorted(by_severity.items())},

@@ -12,6 +12,7 @@ classements de personnes portent sur la participation.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tarfile
@@ -22,11 +23,35 @@ from pathlib import Path
 
 from .config import ROOT_DIR
 from .enrich import ENRICH_FILE, PRS_FILE
-from .ledger import FINDINGS_FILE, RUNS_FILE, SNAPSHOT_DIR, read_jsonl
+from .ledger import FINDINGS_FILE, RUNS_FILE, SNAPSHOT_DIR, read_all
 from .quality import compute, latest
 from .stats import STATS_FILE
 
 SCHEMA_DOC = ROOT_DIR / "docs" / "registre-schema.md"
+
+
+_LOGIN_KEYS = ("user", "author", "resolved_by")
+
+
+def _alias(login):
+    if not login:
+        return login
+    return "u-" + hashlib.sha256(str(login).encode()).hexdigest()[:8]
+
+
+def pseudonymize(value):
+    """Remplace les logins par un alias stable (`u-1a2b3c4d`) dans l'archive machine.
+
+    L'analyse a besoin de savoir que deux réactions viennent de la même personne, et si
+    c'est l'auteur de la PR (`role`), pas de savoir QUI conteste quoi. Le rapport humain,
+    lui, ne nomme que pour la participation.
+    """
+    if isinstance(value, list):
+        return [pseudonymize(v) for v in value]
+    if isinstance(value, dict):
+        return {k: (_alias(v) if k in _LOGIN_KEYS and isinstance(v, str) else pseudonymize(v))
+                for k, v in value.items()}
+    return value
 
 
 def _pct(x: float | None) -> str:
@@ -39,7 +64,7 @@ def _window(rows: list[dict], limite: str) -> list[dict]:
 
 def load(root: Path, since: timedelta | None = None) -> dict[str, list[dict]]:
     limite = (datetime.now(UTC) - since).isoformat(timespec="seconds") if since else ""
-    return {name: _window(read_jsonl(root / name), limite)
+    return {name: _window(read_all(root, name), limite)
             for name in (FINDINGS_FILE, RUNS_FILE, ENRICH_FILE, PRS_FILE)}
 
 
@@ -177,7 +202,7 @@ def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
         staging.mkdir()
         for name, rows in data.items():
             (staging / name).write_text(
-                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                "".join(json.dumps(pseudonymize(r), ensure_ascii=False) + "\n" for r in rows),
                 encoding="utf-8")
         hashes = {r.get("config_hash") for r in data[FINDINGS_FILE] + data[RUNS_FILE]}
         for h in sorted(x for x in hashes if x):

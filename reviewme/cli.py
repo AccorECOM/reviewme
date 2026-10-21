@@ -230,7 +230,7 @@ def _enrich(args) -> int:
     gh = GitHubClient(config)
     try:
         r = enrich(gh, ledger_dir(config), parse_since(args.since), logger,
-                   with_text=with_text, only_pr=args.en_pr)
+                   with_text=with_text, only_pr=args.en_pr, bot_login=config.bot_login)
     finally:
         gh.close()
     print(f"{r['prs']} PR, {r['comments']} commentaire(s) suivi(s).")

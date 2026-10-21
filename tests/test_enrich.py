@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from reviewme import enrich as en
 from reviewme import export as ex
-from reviewme.ledger import FINDINGS_FILE, RUNS_FILE, _append
+from reviewme.ledger import FINDINGS_FILE, RUNS_FILE, write_part
 from reviewme.quality import band, compute
 from reviewme.reconciler import fingerprint_hash
 
@@ -76,6 +76,30 @@ def _human(cid, line, body, parent=None, user="dev"):
             "body": body, "user": {"login": user}, "created_at": "2099-01-01T01:00:00Z"}
 
 
+def test_negation_ne_fait_pas_une_etiquette():
+    assert en.label_reply("pas corrigé pour l'instant") == "other"
+    assert en.label_reply("pas faux, je change") == "other"
+    assert en.label_reply("not fixed yet") == "other"
+    assert en.label_reply("Ce n'est pas le cas ici") == "false_positive"
+
+
+def test_fichier_supprime_n_est_pas_un_suivi_d_effet():
+    """Un 404 (fichier supprimé ou renommé) ne prouve pas que la remarque a été traitée."""
+    rows = [_row(1, 10, content="let x = y!")]
+    gh = _GH(None, [_bot(1, 10)])
+    (line,), _ = en.enrich_pr(gh, 7, rows, {}, with_text=False, logger=LOGGER)
+    assert line["fingerprint_gone_at"] is None and line["file_gone_at"] == "h2"
+
+
+def test_commentaire_d_un_autre_bot_n_est_pas_un_manque():
+    rows = [_row(1, 10, content="let x = y!")]
+    autre = _human(8, 90, "Sonar : complexité")
+    autre["user"] = {"login": "sonarcloud[bot]", "type": "Bot"}
+    _, pr = en.enrich_pr(_GH("", [_bot(1, 10), autre]), 7, rows, {}, with_text=False,
+                         logger=LOGGER)
+    assert pr["human_comments"] == 0 and pr["human_comments_on_silent_lines"] == 0
+
+
 def test_etiquettes_de_reponse():
     assert en.label_reply("Faux positif, ce n'est pas nil ici") == "false_positive"
     assert en.label_reply("C'est volontaire, on garde") == "intended"
@@ -118,8 +142,8 @@ def test_suivi_d_effet_et_reactions():
     assert by[2]["reactions"][0]["role"] == "pr_author"
     assert by[1]["thread_resolved"] is True and by[1]["resolved_by"] == "dev"
     assert by[2]["replies"][0]["contests"] is True
-    assert by[2]["replies"][1]["remember"] == {
-        "rule": "Pas de force unwrap dans les tests", "trusted": True}
+    # Sans `include_text`, la règle elle-même n'est pas écrite : c'est du texte de PR.
+    assert by[2]["replies"][1]["remember"] == {"trusted": True}
     assert "text" not in by[1]["replies"][0]
 
 
@@ -135,6 +159,7 @@ def test_par_pr_manques_et_cout_du_filtre():
 def test_textes_seulement_si_demande():
     lines, pr = _enrich_one(with_text=True)
     assert lines[0]["replies"][0]["text"] == "Corrigé, merci"
+    assert lines[1]["replies"][1]["remember"]["rule"] == "Pas de force unwrap dans les tests"
     assert {c["text"] for c in pr["human_comments_text"]} >= {"Nommage ?"}
 
 
@@ -150,6 +175,28 @@ def test_qualite_et_calibration():
     assert q["calibration"]["86-100"]["followed"] == 1
     assert q["misses"]["on_dropped_findings"] == 1
     assert band(70) == "51-70" and band(71) == "71-85"
+
+
+def test_global_et_repli_hors_du_denominateur():
+    """Un finding délivré dans un commentaire global n'a pas de ligne à suivre."""
+    rows = [_row(1, 10, content="a"), {**_row(55, 20, content="b"), "in_summary": True},
+            {**_row(55, 30, content="c"), "in_summary": True}]
+    q = compute(rows, [], [], [])
+    assert q["by_reviewer"]["tech"]["posted"] == 1 and q["posted_in_summary"] == 2
+
+
+def test_calibration_compte_un_finding_une_fois():
+    """Re-produit à chaque push, un finding ne pèse qu'une fois dans la calibration."""
+    rows = [{**_row(None, 40, fate="dropped_low", conf=40, content="a"), "run_id": str(i),
+             "ts": f"2099-01-0{i + 1}T00:00:00+00:00"} for i in range(3)]
+    assert compute(rows, [], [], [])["calibration"]["0-50"]["findings"] == 1
+
+
+def test_question_n_approuve_pas():
+    rows = [_row(1, 10, content="a")]
+    enrich = [{"comment_id": 1, "reactions": [],
+               "replies": [{"label": "question", "contests": False}]}]
+    assert compute(rows, [], enrich, [])["by_reviewer"]["tech"]["approved"] == 0
 
 
 def test_temoin_contre_live():
@@ -172,17 +219,19 @@ def test_export_archive_et_rapport():
     lines, pr = _enrich_one()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "registre"
-        _append(root / FINDINGS_FILE, [_row(1, 10, content="let x = y!", sev="BLOCKER"),
+        write_part(root, FINDINGS_FILE, [_row(1, 10, content="let x = y!", sev="BLOCKER"),
                                        _row(2, 20, content="let z = 1")])
-        _append(root / RUNS_FILE, [{"ts": TS, "pr": 7, "variant": "live", "reviewer": "tech",
+        write_part(root, RUNS_FILE, [{"ts": TS, "pr": 7, "variant": "live", "reviewer": "tech",
                                     "cost_usd": 0.8, "duration_s": 60, "num_turns": 14,
                                     "diff_lines": 120}])
-        _append(root / en.ENRICH_FILE, lines)
-        _append(root / en.PRS_FILE, [pr])
+        write_part(root, en.ENRICH_FILE, lines)
+        write_part(root, en.PRS_FILE, [pr])
         archive, rapport = ex.export(root, Path(tmp) / "out", timedelta(days=7), repo="o/r",
                                      stats_file=Path(tmp) / "absent.json")
         with tarfile.open(archive) as tar:
             noms = {Path(n).name for n in tar.getnames()}
+            membre = next(m for m in tar.getmembers() if m.name.endswith("enrich.jsonl"))
+            archive_text = tar.extractfile(membre).read().decode()
         texte = rapport.read_text()
     assert {"findings.jsonl", "runs.jsonl", "enrich.jsonl", "prs.jsonl", "quality.json",
             "SCHEMA.md", "rapport-semaine.md"} <= noms
@@ -190,3 +239,4 @@ def test_export_archive_et_rapport():
     assert "Sauvetage" in texte and "discussion_r1" in texte
     # Participation uniquement : l'auteur qui a contesté n'est pas désigné comme tel.
     assert "auteur" not in texte.split("## Stats fun")[0]
+    assert "dev" not in archive_text and "u-" in archive_text

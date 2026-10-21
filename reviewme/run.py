@@ -103,21 +103,6 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
     return spec, result
 
 
-def _enrich_before_post(pr_number: int, config: Config, gh: GitHubClient, project,
-                        logger: logging.Logger) -> None:
-    """Enrichit le registre pour CETTE PR. Best-effort : n'interrompt jamais la review."""
-    try:
-        from datetime import timedelta
-
-        from .enrich import enrich
-        from .ledger import include_text, ledger_dir
-        enrich(gh, ledger_dir(config), timedelta(days=30), logger,
-               with_text=include_text(project), only_pr=pr_number)
-    except Exception as e:
-        logger.info("PR #%s : enrichissement du registre ignoré (%s)", pr_number,
-                    type(e).__name__)
-
-
 def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logger,
                *, force: bool = False) -> dict:
     """Review une PR (dict complet de l'API GitHub). Renvoie un dict de compteurs."""
@@ -209,12 +194,6 @@ def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logge
                            pr_number, total_cost, pr_budget)
 
         # --- Préparation (sans écriture), puis UN SEUL point d'écriture (D5) ---
-        # Devenir des remarques des commits précédents (👍/👎, réponses, suivi d'effet),
-        # relevé avant de poster : coût nul, on est déjà sur la PR. Le job de nuit
-        # (`reviewme enrich`) couvre ce qui arrive après le dernier push.
-        if not config.dry_run and not config.fake:
-            _enrich_before_post(pr_number, config, gh, project, logger)
-
         needs_globals = any(s.output_mode == "global" for s, _ in outcomes)
         ctx = load_pr_context(gh, pr_number, with_globals=needs_globals)
         multi = len(outcomes) > 1
@@ -224,12 +203,21 @@ def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logge
                     prefix=f"[{spec.id.upper()}]" if multi else "")
             for spec, result in outcomes
         ]
-        counts = post_all(pr, config, gh, prepared, logger)
-        counts["cost_usd"] = round(total_cost, 4)
-
         # Registre : chaque finding avec son sort, posté ou non (cf. `ledger.py`). Après
-        # `post_all`, qui fixe les sorts `capped` et les ids des commentaires postés.
+        # `post_all`, qui fixe les sorts `capped` et les ids des commentaires postés ; et
+        # même si `post_all` échoue, pour que le run (et son coût) reste mesurable.
+        #
+        # Le devenir des remarques (👍/👎, réponses) n'est PAS relevé ici : ce serait des
+        # centaines d'appels API sur le chemin critique de chaque push. C'est le travail du
+        # job de nuit (`reviewme enrich`).
         from .ledger import record as enregistrer_registre
+        try:
+            counts = post_all(pr, config, gh, prepared, logger)
+        except Exception:
+            enregistrer_registre(pr, config, project, prepared, outcomes, diff, logger,
+                                 status="post_failed")
+            raise
+        counts["cost_usd"] = round(total_cost, 4)
         counts["run_id"] = enregistrer_registre(pr, config, project, prepared, outcomes,
                                                 diff, logger)
         counts.update(engagement)

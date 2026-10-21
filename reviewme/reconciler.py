@@ -337,9 +337,10 @@ def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: l
     `create_review` ne renvoie que la review : on relit ses commentaires et on les apparie
     par marqueur. Best-effort : un échec ne touche que le registre, jamais la PR.
     """
-    par_marqueur = {marker_key(c["body"]): c["_finding"] for c in batch
-                    if c.get("_finding") is not None}
-    if not par_marqueur or not (review or {}).get("id"):
+    # Clé (chemin, ligne, marqueur) : deux lignes au contenu identique partagent le marqueur.
+    par_cle = {(c["path"], c["line"], marker_key(c["body"])): c["_finding"] for c in batch
+               if c.get("_finding") is not None}
+    if not par_cle or not (review or {}).get("id"):
         return
     try:
         commentaires = gh.list_review_comments_of_review(pr_number, review["id"])
@@ -348,7 +349,8 @@ def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: l
                     pr_number, type(e).__name__)
         return
     for c in commentaires:
-        f = par_marqueur.get(marker_key(c.get("body", "")))
+        f = par_cle.get((c.get("path"), c.get("line") or c.get("original_line"),
+                         marker_key(c.get("body", ""))))
         if f is not None:
             f.comment_id = c.get("id")
 

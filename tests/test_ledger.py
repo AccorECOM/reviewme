@@ -67,7 +67,8 @@ class _FakeGH:
         return {"id": 999}
 
     def list_review_comments_of_review(self, pr_number, review_id):
-        return [{"id": 100 + i, "body": c["body"]} for i, c in enumerate(self.posted)]
+        return [{"id": 100 + i, "body": c["body"], "path": c["path"], "line": c["line"]}
+                for i, c in enumerate(self.posted)]
 
     def post_issue_comment(self, pr_number, body):
         return {"id": 555}
@@ -132,8 +133,8 @@ def _record(tmp, project=None, **cfg):
     prep = prepare(PR, config, _ctx(), result, LOGGER, "tech")
     run_id = ledger.record(PR, config, project or _project(), [prep], [(_spec(), result)],
                            DIFF, LOGGER, root=Path(tmp))
-    return run_id, ledger.read_jsonl(Path(tmp) / "findings.jsonl"), \
-        ledger.read_jsonl(Path(tmp) / "runs.jsonl")
+    return run_id, ledger.read_all(Path(tmp), "findings.jsonl"), \
+        ledger.read_all(Path(tmp), "runs.jsonl")
 
 
 def test_registre_garde_les_ecartes_avec_leur_confiance():
@@ -183,6 +184,20 @@ def test_mode_simule_ecrit_a_part(monkeypatch):
     monkeypatch.delenv("REVIEWME_LEDGER_DIR", raising=False)
     assert ledger.ledger_dir(_config(fake=True)).name == "ledger-simule"
     assert ledger.ledger_dir(_config()).name == "ledger"
+    # Même quand la CI impose le dossier : un run simulé ne pollue jamais le vrai registre.
+    monkeypatch.setenv("REVIEWME_LEDGER_DIR", "/cache/registre")
+    assert str(ledger.ledger_dir(_config(fake=True))) == "/cache/registre-simule"
+
+
+def test_un_fichier_par_run_et_lignes_corrompues_ignorees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _record(tmp)
+        _record(tmp)
+        assert len(list((root / "findings").glob("*.jsonl"))) == 2
+        (root / "findings.jsonl").write_text('{"fate": "posted"}\n{coupé\n')
+        rows = ledger.read_all(root, "findings.jsonl")
+        assert len(rows) == 1 + 2 * 3
 
 
 def test_hash_de_config_suit_les_reglages():

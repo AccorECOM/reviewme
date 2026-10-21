@@ -143,12 +143,21 @@ class GitHubClient:
 
     def list_review_comments_of_review(self, pr_number: int, review_id: int) -> list[dict]:
         """Commentaires d'UNE review (pour rattacher leurs ids aux findings postés)."""
-        resp = self._request(
-            "GET", f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/reviews/{review_id}/comments",
-            params={"per_page": 100},
-        )
-        resp.raise_for_status()
-        return resp.json()
+        comments: list[dict] = []
+        page = 1
+        while True:
+            resp = self._request(
+                "GET",
+                f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/reviews/{review_id}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            comments.extend(batch)
+            page += 1
+        return comments
 
     def list_issue_comments(self, pr_number: int) -> list[dict]:
         """Commentaires globaux (issue comments) de la PR, paginés.
@@ -225,15 +234,26 @@ class GitHubClient:
     def review_threads(self, pr_number: int) -> list[dict]:
         """Fils de review (résolus ou non) via GraphQL — l'API REST ne l'expose pas."""
         owner, name = self._repo.split("/")
-        query = """query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){
-          pullRequest(number:$pr){reviewThreads(first:100){nodes{isResolved
+        query = """query($o:String!,$n:String!,$pr:Int!,$after:String){repository(owner:$o,name:$n){
+          pullRequest(number:$pr){reviewThreads(first:100,after:$after){
+          pageInfo{hasNextPage endCursor} nodes{isResolved
           resolvedBy{login} comments(first:1){nodes{databaseId}}}}}}}"""
-        resp = self._request("POST", f"{API_BASE}/graphql", json={
-            "query": query, "variables": {"o": owner, "n": name, "pr": pr_number}})
-        resp.raise_for_status()
-        data = resp.json()
-        pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
-        return ((pr.get("reviewThreads") or {}).get("nodes")) or []
+        nodes: list[dict] = []
+        after = None
+        for _ in range(20):                # 2 000 fils au plus : au-delà, ce n'est plus une PR
+            resp = self._request("POST", f"{API_BASE}/graphql", json={
+                "query": query,
+                "variables": {"o": owner, "n": name, "pr": pr_number, "after": after}})
+            resp.raise_for_status()
+            data = resp.json()
+            pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+            threads = pr.get("reviewThreads") or {}
+            nodes.extend(threads.get("nodes") or [])
+            info = threads.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                break
+            after = info.get("endCursor")
+        return nodes
 
     # ------------------------------------------------------------------ écriture
     def post_issue_comment(self, pr_number: int, body: str) -> dict:

@@ -12,7 +12,10 @@ posté ou non, avec son sort :
 - `config-snapshot/<hash>/` : l'état des réglages au moment du run, pour attribuer un
   changement de comportement à un changement de configuration.
 
-Append-only. Un run se reconnaît à son `run_id` ; rejouer un build ajoute un run, il
+Append-only, et UN FICHIER PAR RUN (`findings/<horodatage>-<run_id>.jsonl`, écrit d'un
+bloc puis renommé) : deux runs concurrents ne peuvent pas entrelacer leurs lignes, et un
+cache de CI qui fusionne des dossiers ne perd que des fichiers entiers, jamais une ligne
+coupée. Les lecteurs (`read_all`) fusionnent les parts. Rejouer un build ajoute un run, il
 n'écrase rien : l'analyse dédoublonne par (`pr`, `head_sha`, `variant`) si besoin.
 
 Le registre n'influence JAMAIS la review : toute erreur d'écriture est journalisée puis
@@ -46,15 +49,15 @@ SNAPSHOT_DIR = "config-snapshot"
 def ledger_dir(config: Config | None = None) -> Path:
     """Dossier du registre.
 
-    Un run SIMULÉ (`REVIEWME_FAKE`) écrit à part : ses findings sont fabriqués, les mêler
-    aux vrais fausserait toutes les mesures — mais on veut pouvoir vérifier la tuyauterie.
+    Un run SIMULÉ (`REVIEWME_FAKE`) écrit à part, même quand `REVIEWME_LEDGER_DIR` est
+    posé : ses findings sont fabriqués, les mêler aux vrais fausserait toutes les mesures —
+    mais on veut pouvoir vérifier la tuyauterie.
     """
     explicit = os.environ.get("REVIEWME_LEDGER_DIR", "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
+    base = Path(explicit).expanduser() if explicit else DATA_DIR / "ledger"
     if config is not None and config.fake:
-        return DATA_DIR / "ledger-simule"
-    return DATA_DIR / "ledger"
+        return base.with_name(base.name + "-simule")
+    return base
 
 
 def variant() -> str:
@@ -216,18 +219,41 @@ def run_row(base: dict, reviewer: str, result, *, threshold: int, diff_files: in
     }
 
 
-def _append(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+def write_part(root: Path, name: str, rows: list[dict], part_id: str = "") -> Path | None:
+    """Écrit `rows` dans une part de `name` (`findings.jsonl` -> `findings/<id>.jsonl`).
+
+    Écriture dans un fichier temporaire puis renommage : une part est complète ou absente.
+    """
+    if not rows:
+        return None
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    folder = root / Path(name).stem
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{stamp}-{part_id or uuid.uuid4().hex[:12]}.jsonl"
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                   encoding="utf-8")
+    tmp.replace(target)
+    return target
+
+
+def read_all(root: Path, name: str) -> list[dict]:
+    """Toutes les lignes de `name` : fichier unique historique, puis parts dans l'ordre."""
+    rows = read_jsonl(root / name)
+    folder = root / Path(name).stem
+    if folder.is_dir():
+        for part in sorted(folder.glob("*.jsonl")):
+            rows.extend(read_jsonl(part))
+    return rows
 
 
 def record(pr: dict, config: Config, project, prepared: list, outcomes: list, diff: str,
-           logger: logging.Logger, *, root: Path | None = None) -> str | None:
+           logger: logging.Logger, *, root: Path | None = None,
+           status: str = "ok") -> str | None:
     """Écrit le run dans le registre. Renvoie le `run_id`, ou None si rien n'a été écrit.
 
     `prepared` et `outcomes` sont alignés (un `PreparedReview` par reviewer exécuté).
+    `status` = `post_failed` quand l'écriture GitHub a échoué : le run reste mesurable.
     """
     try:
         root = root or ledger_dir(config)
@@ -246,6 +272,7 @@ def record(pr: dict, config: Config, project, prepared: list, outcomes: list, di
             "engine_commit": engine_commit(),
             "config_hash": chash,
             "dry_run": config.dry_run,
+            "status": status,
         }
         with_text = include_text(project)
         files, lines = diff_size(diff)
@@ -259,8 +286,8 @@ def record(pr: dict, config: Config, project, prepared: list, outcomes: list, di
             f_rows.extend(rows)
             r_rows.append(run_row(base, spec.id, result, threshold=config.confidence_threshold,
                                   diff_files=files, diff_lines=lines, fates=fates))
-        _append(root / FINDINGS_FILE, f_rows)
-        _append(root / RUNS_FILE, r_rows)
+        write_part(root, FINDINGS_FILE, f_rows, run_id)
+        write_part(root, RUNS_FILE, r_rows, run_id)
         logger.info("PR #%s : registre %s — %d finding(s), %d run(s) reviewer (%s)",
                     pr["number"], run_id, len(f_rows), len(r_rows), root)
         return run_id
@@ -274,7 +301,7 @@ def read_jsonl(path: Path) -> list[dict]:
     """Lit un JSONL en ignorant les lignes corrompues (écriture interrompue en CI)."""
     if not path.is_file():
         return []
-    rows = []
+    rows, rejected = [], 0
     for brute in path.read_text(encoding="utf-8").splitlines():
         brute = brute.strip()
         if not brute:
@@ -282,5 +309,8 @@ def read_jsonl(path: Path) -> list[dict]:
         try:
             rows.append(json.loads(brute))
         except ValueError:
-            continue
+            rejected += 1
+    if rejected:
+        logging.getLogger("reviewme").warning("registre : %d ligne(s) illisible(s) ignorée(s) "
+                                              "dans %s", rejected, path)
     return rows

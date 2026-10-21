@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .diff_utils import normalize_line
-from .ledger import FINDINGS_FILE, SCHEMA_VERSION, _append, read_jsonl
+from .ledger import FINDINGS_FILE, SCHEMA_VERSION, read_all, write_part
 from .reconciler import _MARKER_RE, _SIGNATURE, fingerprint_hash, marker_key
 
 ENRICH_FILE = "enrich.jsonl"
@@ -39,24 +39,40 @@ NEARBY_LINES = 10
 MAX_TEXT = 1000
 
 #: Ordre = priorité : une réponse « non c'est voulu, corrigé quand même » est `intended`.
-_LABELS = (
-    ("false_positive", r"faux positif|false positive|\bfaux\b|\bwrong\b|incorrect|pas vrai|"
-                       r"n'est pas le cas|\bhallucin|ne s'applique pas|doesn'?t apply|not true"),
-    ("intended", r"volontaire|\bvoulu\b|intended|by design|expr[eè]s|on garde|c'est normal|"
-                 r"assum[ée]|on le laisse|as expected|on purpose"),
-    ("fixed", r"corrig[ée]|\bfix(ed)?\b|c'est fait|\bdone\b|r[ée]solu|modifi[ée]|chang[ée]|"
-              r"updated|bien vu|good catch"),
+#: Les motifs de contestation contiennent eux-mêmes une négation (« n'est pas le cas ») :
+#: ils sont testés tels quels. Les autres ne valent qu'en l'absence de négation.
+_CONTEST = (
+    ("false_positive", r"faux positif|false positive|n'est pas le cas|ne s'applique pas|"
+                       r"doesn'?t apply|not true|pas vrai|\bhallucin|c'est faux"),
+    ("intended", r"volontaire|\bvoulu\b|intended|by design|expr[eè]s|on garde|"
+                 r"on le laisse|on purpose"),
+)
+_PLAIN = (
+    ("false_positive", r"\bincorrect\b|\bwrong\b"),
+    ("fixed", r"corrig[ée]|\bfix(ed)?\b|c'est fait|\bdone\b|r[ée]solu|bien vu|good catch"),
     ("unimportant", r"pas important|\bnit\b|osef|pas prioritaire|plus tard|\blater\b|"
                     r"hors scope|hors sujet|out of scope|pas grave"),
 )
+_NEGATION = re.compile(r"\b(pas|plus|jamais|not|never|no|non)\b|n'|n’")
 _REMEMBER = re.compile(r"^\s*@reviewme\s+remember\s+(.+)", re.IGNORECASE | re.DOTALL)
 
 
 def label_reply(text: str) -> str:
-    """Étiquette d'une réponse humaine, par mots-clés. À relire : c'est un tri grossier."""
+    """Étiquette d'une réponse humaine, par mots-clés. À relire : c'est un tri grossier.
+
+    Dans le doute, `other` : une étiquette fausse biaise la mesure, une étiquette absente
+    la laisse seulement incomplète. « pas corrigé », « pas faux » tombent donc en `other`.
+    """
     t = (text or "").lower()
-    for label, motif in _LABELS:
+    for label, motif in _CONTEST:
         if re.search(motif, t):
+            return label
+    negated = bool(_NEGATION.search(t))
+    for label, motif in _PLAIN:
+        if re.search(motif, t):
+            # « pas important » / « pas prioritaire » portent leur négation : c'est le sens.
+            if negated and label != "unimportant":
+                return "other"
             return label
     return "question" if t.strip().endswith("?") else "other"
 
@@ -77,13 +93,22 @@ def _is_bot(comment: dict) -> bool:
     return marker_key(body) is not None or _SIGNATURE in body
 
 
+def _is_machine(comment: dict) -> bool:
+    """Commentaire d'un AUTRE outil (Copilot, Sonar, Dependabot…) : ni le nôtre, ni un
+    humain. Il ne doit pas compter comme un manqué."""
+    user = comment.get("user") or {}
+    return user.get("type") == "Bot" or str(user.get("login", "")).endswith("[bot]")
+
+
 def _clean(text: str) -> str:
     return _MARKER_RE.sub("", text or "").strip()[:MAX_TEXT]
 
 
-def _fingerprints_of(content: str | None, path: str) -> set[str]:
-    if content is None:
-        return set()
+#: Le fichier n'existe plus à ce commit (supprimé ou renommé) : distinct de « ligne absente ».
+FILE_GONE = "file_gone"
+
+
+def _fingerprints_of(content: str, path: str) -> set[str]:
     return {fingerprint_hash(path, line) for line in content.splitlines()
             if normalize_line(line)}
 
@@ -94,14 +119,32 @@ class _Files:
     def __init__(self, gh):
         self.gh, self.cache = gh, {}
 
-    def fingerprints(self, path: str, ref: str) -> set[str] | None:
+    def fingerprints(self, path: str, ref: str) -> set[str] | str | None:
+        """Empreintes des lignes, `FILE_GONE` si le fichier n'existe plus, None si inconnu."""
         key = (path, ref)
         if key not in self.cache:
             try:
-                self.cache[key] = _fingerprints_of(self.gh.get_file_at(path, ref), path)
+                content = self.gh.get_file_at(path, ref)
+                self.cache[key] = FILE_GONE if content is None else _fingerprints_of(content, path)
             except Exception:
                 self.cache[key] = None     # inconnu : on ne conclut rien
         return self.cache[key]
+
+
+class _Permissions:
+    """Droit d'écriture par login, une requête par personne et par passe."""
+
+    def __init__(self, gh):
+        self.gh, self.cache = gh, {}
+
+    def can_write(self, login: str) -> bool:
+        if login not in self.cache:
+            try:
+                self.cache[login] = self.gh.get_permission(login) in ("admin", "maintain",
+                                                                      "write")
+            except Exception:
+                self.cache[login] = False
+        return self.cache[login]
 
 
 def _last_by_comment(rows: list[dict]) -> dict[int, dict]:
@@ -114,11 +157,17 @@ def _last_by_comment(rows: list[dict]) -> dict[int, dict]:
 
 def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *,
               with_text: bool, logger: logging.Logger, now: str | None = None,
-              files: _Files | None = None) -> tuple[list[dict], dict]:
+              files: _Files | None = None, perms: _Permissions | None = None,
+              first_head: str | None = None, bot_login: str = "") -> tuple[list[dict], dict]:
     """Enrichit UNE PR. `rows` = ses lignes du registre (variant live), `previous` = la
-    dernière ligne d'enrichissement connue par comment_id. Renvoie (lignes, ligne PR)."""
+    dernière ligne d'enrichissement connue par comment_id. Renvoie (lignes, ligne PR).
+
+    `first_head` = commit du PREMIER run connu sur la PR, même hors fenêtre.
+    `bot_login` = identité du bot quand elle est dédiée : ses propres réactions ne comptent pas.
+    """
     now = now or datetime.now(UTC).isoformat(timespec="seconds")
     files = files or _Files(gh)
+    perms = perms or _Permissions(gh)
     pr = gh.get_pr(pr_number)
     head = pr["head"]["sha"]
     author = (pr.get("user") or {}).get("login", "")
@@ -132,7 +181,7 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
                     type(e).__name__)
         threads = {}
 
-    humans = [c for c in comments if not _is_bot(c)]
+    humans = [c for c in comments if not _is_bot(c) and not _is_machine(c)]
     human_roots = [c for c in humans if c.get("in_reply_to_id") is None]
     replies_by_parent: dict[int, list[dict]] = {}
     for c in humans:
@@ -152,19 +201,26 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
                 "fingerprint": row.get("fingerprint"), "rule_id": row.get("rule_id"),
                 "head_sha": head}
 
-        # Suivi d'effet : l'empreinte n'existe plus nulle part dans le fichier à la tête.
+        # Suivi d'effet : l'empreinte n'existe plus nulle part dans le fichier à la tête,
+        # ET le fichier existe toujours. Un fichier supprimé ou renommé ne prouve rien.
         gone = prev.get("fingerprint_gone_at")
+        file_gone = prev.get("file_gone_at")
         if not gone and row.get("fingerprint"):
             present = files.fingerprints(row["path"], head)
-            if present is not None and row["fingerprint"] not in present:
+            if present == FILE_GONE:
+                file_gone = file_gone or head
+            elif present is not None and row["fingerprint"] not in present:
                 gone = head
         line["fingerprint_gone_at"] = gone
+        line["file_gone_at"] = file_gone
 
         try:
             line["reactions"] = [
                 {"content": r.get("content"), "user": (r.get("user") or {}).get("login", ""),
                  "role": role((r.get("user") or {}).get("login", ""))}
-                for r in gh.list_comment_reactions(cid) if r.get("content") in ("+1", "-1")]
+                for r in gh.list_comment_reactions(cid)
+                if r.get("content") in ("+1", "-1") and not _is_machine(r)
+                and (r.get("user") or {}).get("login") != bot_login]
         except Exception:
             line["reactions"] = prev.get("reactions", [])     # garde la dernière lecture
 
@@ -177,11 +233,11 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
             rep["contests"] = rep["label"] in ("false_positive", "intended")
             remember = _REMEMBER.match(body)
             if remember:
-                # Règle donnée explicitement par un humain : gardée telle quelle (c'est sa
-                # finalité), mais seulement d'un auteur qui a le droit d'écrire.
-                rep["remember"] = {"rule": remember.group(1).strip()[:MAX_TEXT],
-                                   "trusted": gh.get_permission(login) in ("admin", "write",
-                                                                           "maintain")}
+                # Règle donnée explicitement par un humain, retenue seulement d'un auteur qui
+                # a le droit d'écrire. Son texte suit la règle commune (`include_text`).
+                rep["remember"] = {"trusted": perms.can_write(login)}
+                if with_text:
+                    rep["remember"]["rule"] = remember.group(1).strip()[:MAX_TEXT]
             if with_text:
                 rep["text"] = _clean(body)
             replies.append(rep)
@@ -204,12 +260,25 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
         out.append(line)
 
     # --- Par PR : manqués approchés et coût du filtre en rappel ---
-    def near(c: dict, fates: tuple[str, ...]) -> bool:
-        ln = c.get("line") or c.get("original_line") or 0
-        return any(r.get("path") == c.get("path") and r.get("fate") in fates
-                   and abs((r.get("line") or 0) - ln) <= NEARBY_LINES for r in rows)
+    # Les numéros de ligne n'ont de sens qu'à un commit donné. Un commentaire encore à jour
+    # (`line`) se compare au DERNIER run ; un commentaire devenu obsolète se compare, par
+    # `original_line`, au run fait sur le commit où il a été écrit.
+    last_run = max(rows, key=lambda r: r.get("ts", ""))["run_id"] if rows else None
+    rows_by_head: dict[str, list[dict]] = {}
+    for r in rows:
+        rows_by_head.setdefault(r.get("head_sha"), []).append(r)
 
-    first_head = min(rows, key=lambda r: r.get("ts", ""))["head_sha"] if rows else head
+    def near(c: dict, fates: tuple[str, ...]) -> bool:
+        if c.get("line"):
+            ln, candidates = c["line"], [r for r in rows if r.get("run_id") == last_run]
+        else:
+            ln = c.get("original_line") or 0
+            candidates = rows_by_head.get(c.get("original_commit_id"), [])
+        return any(r.get("path") == c.get("path") and r.get("fate") in fates
+                   and abs((r.get("line") or 0) - ln) <= NEARBY_LINES for r in candidates)
+
+    if first_head is None:
+        first_head = min(rows, key=lambda r: r.get("ts", ""))["head_sha"] if rows else head
     try:
         shas = [c.get("sha") for c in gh.list_pr_commits(pr_number)]
         after = len(shas) - shas.index(first_head) - 1 if first_head in shas else None
@@ -239,26 +308,31 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
 
 
 def enrich(gh, root: Path, since: timedelta, logger: logging.Logger, *, with_text: bool,
-           only_pr: int | None = None) -> dict:
+           only_pr: int | None = None, bot_login: str = "") -> dict:
     """Enrichit toutes les PR du registre vues dans la fenêtre. Renvoie des compteurs."""
     limite = (datetime.now(UTC) - since).isoformat(timespec="seconds")
-    rows = [r for r in read_jsonl(root / FINDINGS_FILE)
-            if r.get("variant", "live") == "live" and r.get("ts", "") >= limite
-            and not r.get("dry_run")]
+    all_live = [r for r in read_all(root, FINDINGS_FILE)
+                if r.get("variant", "live") == "live" and not r.get("dry_run")]
+    first_head: dict[int, str] = {}
+    for r in sorted(all_live, key=lambda r: r.get("ts", "")):
+        first_head.setdefault(r["pr"], r.get("head_sha"))
+    rows = [r for r in all_live if r.get("ts", "") >= limite]
     if only_pr is not None:
         rows = [r for r in rows if r.get("pr") == only_pr]
-    previous = _last_by_comment(read_jsonl(root / ENRICH_FILE))
+    previous = _last_by_comment(read_all(root, ENRICH_FILE))
     by_pr: dict[int, list[dict]] = {}
     for r in rows:
         by_pr.setdefault(r["pr"], []).append(r)
 
-    files = _Files(gh)
+    files, perms = _Files(gh), _Permissions(gh)
     lines: list[dict] = []
     prs: list[dict] = []
     for pr_number, pr_rows in sorted(by_pr.items()):
         try:
             out, pr_line = enrich_pr(gh, pr_number, pr_rows, previous, with_text=with_text,
-                                     logger=logger, files=files)
+                                     logger=logger, files=files, perms=perms,
+                                     first_head=first_head.get(pr_number),
+                                     bot_login=bot_login)
         except Exception as e:
             logger.warning("PR #%s : enrichissement impossible (%s: %s)", pr_number,
                            type(e).__name__, e)
@@ -266,7 +340,7 @@ def enrich(gh, root: Path, since: timedelta, logger: logging.Logger, *, with_tex
         lines.extend(out)
         prs.append(pr_line)
 
-    _append(root / ENRICH_FILE, lines)
-    _append(root / PRS_FILE, prs)
+    write_part(root, ENRICH_FILE, lines)
+    write_part(root, PRS_FILE, prs)
     logger.info("enrich : %d PR, %d commentaire(s) suivis (%s)", len(prs), len(lines), root)
     return {"prs": len(prs), "comments": len(lines)}
