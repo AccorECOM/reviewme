@@ -17,7 +17,10 @@ an absence, not a located error.
    (scope creep — often the real topic of a functional review).
 
 ## Format of the `summary`
-Start with a one-line verdict: `N/M criteria covered`.
+If every criterion is covered and nothing in the PR falls outside the ticket, leave
+`summary` empty (`""`): nothing is posted, there is nothing for the developer to act on.
+
+Otherwise, start with a one-line verdict: `N/M criteria covered`.
 Then a list, one criterion per line, prefixed with ✅ / ⚠️ / ❌, stating in one sentence
 **where** it is implemented (file) or **what is missing**.
 End with the open questions for the developer, if any.

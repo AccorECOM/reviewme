@@ -359,8 +359,11 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         # "Silence is better than noise": nothing to say and nothing posted so far ->
         # no comment. An already posted comment, however, is updated so as not to leave
         # in place remarks that no longer hold.
+        # "Nothing to say" is the reviewer's call: an empty `summary` (its persona tells it
+        # when). Without that signal, a reviewer that puts everything in `summary` (e.g.
+        # `us`) would never post anything.
         if silent_when_clean and not inline and not out_of_diff and not conseils \
-                and existing is None:
+                and not (result.summary or "").strip() and existing is None:
             logger.info("PR #%s [%s]: nothing to report, no comment (silent_when_clean)",
                         pr_number, reviewer_id)
             return prep

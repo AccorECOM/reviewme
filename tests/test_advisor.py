@@ -143,7 +143,7 @@ def test_core_reviewer_customized_by_project_toml():
             'instructions = "Services live in src/services."\nmax_turns = 50\n')
         tech = load_project("shop", Path(tmp)).reviewers[0]
         assert tech.context_read[-1] == "Documentation/ARCHITECTURE.md"
-        assert "AGENTS.md" in tech.context_read          # the core base is kept
+        assert "CONTRIBUTING.md" in tech.context_read    # the core base is kept
         assert tech.when_paths == ("src/**",) and tech.max_turns == 50
         assert tech.system_prompt.endswith("Services live in src/services.")
 

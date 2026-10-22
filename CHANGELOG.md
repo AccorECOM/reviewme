@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+- Core review method rewritten in three steps (understand the change, broad hunt, verify):
+  explicit questions on intent, edges, silent failures, access and dead code; every finding
+  carries its fix; severity from the consequence in the project; an edge case counts only
+  if a caller can reach it; a flawed approach is said once in the summary.
+- Core `tech` reviewer rewritten from a field-tested Tech Lead review agent: priorities
+  (correctness, security, reliability, data and performance, design, tests, conventions),
+  severity and confidence scales, where to find the project's rules. `AGENTS.md` is no
+  longer listed in its `context.read` (read automatically).
+- `silent_when_clean` now follows the reviewer's own signal, an empty `summary`: `us`
+  (which writes everything in `summary`) could never post before. `us` and `advisor` leave
+  `summary` empty when there is nothing to report.
+
 ## 1.1.0
 
 - `reviewme watch`: local loop that polls a repository's open PRs and reviews each PR

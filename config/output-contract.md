@@ -45,7 +45,8 @@ no ``` fence). Structure:
 
 ## Fields
 - `status`: always `"COMMENT"` (the bot never sets APPROVE/REQUEST_CHANGES).
-- `summary`: required, non-empty (used as the review body and as a fallback).
+- `summary`: required (used as the review body and as a fallback). Leave it empty (`""`)
+  only when your persona says you stay silent when there is nothing to report.
 - `findings`: list (possibly empty). A finding without a usable `path`/`line` is ignored.
 - `severity`: one of the three values. `rule_id` and `snippet` are optional (display).
 - `advice`: reserved for reviewers whose persona asks for it (e.g. `advisor`); otherwise,

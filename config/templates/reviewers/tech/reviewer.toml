@@ -16,8 +16,8 @@ priority = 10              # runs first (the most useful one if the budget runs 
 # Project conventions, READ FROM THE REVIEWED REPOSITORY at each review (never copied here:
 # a copy drifts from the repo at the first change). File -> injected content;
 # folder -> inventory of its .md files. A path that cannot be found is reported as a WARNING.
+# CLAUDE.md, AGENTS.md and .claude/rules/ are read automatically: do not list them.
 read = [
-  "AGENTS.md",
   "CONTRIBUTING.md",
   "docs/",
 ]
