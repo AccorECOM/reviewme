@@ -157,7 +157,7 @@ def test_verifier_reason_only_with_text():
 
 def test_method_injected_before_contract():
     prompt = _build_prompt(7, "t", "/tmp/x.diff", _config(), _spec())
-    assert prompt.index("Phase 2: verification") < prompt.index("Output contract")
+    assert prompt.index("Step 3: verify") < prompt.index("Output contract")
     assert "evidence" in prompt
 
 
@@ -230,9 +230,14 @@ def test_silent_outside_global_mode_rejected():
 
 def test_silent_when_nothing_in_global_mode():
     ctx = PrContext(valid={})
-    prep = prepare(PR, _config(), ctx, ReviewResult("COMMENT", "Nothing to report", []), LOGGER, "us",
+    # Silence is the reviewer's call: an empty `summary`.
+    prep = prepare(PR, _config(), ctx, ReviewResult("COMMENT", "", []), LOGGER, "us",
                    output_mode="global", silent_when_clean=True)
     assert prep.global_body is None
+    # A summary-only reviewer (e.g. `us` with an uncovered criterion) still posts.
+    prep = prepare(PR, _config(), ctx, ReviewResult("COMMENT", "1/2 criteria covered", []),
+                   LOGGER, "us", output_mode="global", silent_when_clean=True)
+    assert prep.global_body and "1/2 criteria covered" in prep.global_body
     # Without the option, the historical behavior is kept.
     prep = prepare(PR, _config(), ctx, ReviewResult("COMMENT", "Nothing to report", []), LOGGER, "us",
                    output_mode="global")

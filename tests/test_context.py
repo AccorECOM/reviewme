@@ -197,7 +197,7 @@ def test_baseline_mode(monkeypatch):
     assert cfg.baseline and cfg.dry_run and not cfg.verify
     assert cfg.inline_min_severity == "MINOR" and ledger.variant() == "baseline"
     spec = ReviewerSpec(id="tech", project="p", system_prompt="x")
-    assert "Phase 2" not in _build_prompt(1, "t", "/x", cfg, spec)
+    assert "Step 3: verify" not in _build_prompt(1, "t", "/x", cfg, spec)
 
 
 def test_config_source(monkeypatch):

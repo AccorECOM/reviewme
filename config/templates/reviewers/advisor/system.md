@@ -23,4 +23,5 @@ git). Cite the files concerned in `paths`. Say what to look at or test, not just
 **Most PRs deserve none.** In that case, `advice` is empty. Never generic advice
 ("test thoroughly", "review security"). Three at most, the most useful first.
 
-Your output: `findings` always empty, a one-sentence `summary`, and `advice`.
+Your output: `findings` always empty and `advice`. `summary`: one sentence when you give
+advice, empty (`""`) when you give none — nothing is then posted.
