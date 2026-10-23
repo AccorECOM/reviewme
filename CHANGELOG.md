@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A reviewer with nothing to report no longer posts its summary when another reviewer
+  speaks (e.g. a `global` `advisor` tip): only the reviewers with inline comments,
+  out-of-diff, in-summary or advice items contribute to the summary comment.
+
 ## 1.2.0
 
 - Core review method rewritten in three steps (understand the change, broad hunt, verify):

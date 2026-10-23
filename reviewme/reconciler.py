@@ -496,11 +496,16 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
     batch = _apply_cap(prepared, config.max_comments_per_pr, logger, pr_number)
     replies = [r for p in prepared for r in p.replies]
     globals_ = [p for p in prepared if p.global_body]
-    inline_summaries = [p.summary for p in prepared if p.output_mode != "global" and p.summary]
-    summary_body = "\n\n---\n\n".join(inline_summaries) if inline_summaries else ""
+    # Only the reviewers that have something to deliver: a clean reviewer's "nothing to
+    # report" would otherwise be posted as soon as ANOTHER reviewer speaks (a `global`
+    # advisor's tip was enough to publish every inline reviewer's summary).
+    in_batch = {c["_reviewer"] for c in batch}
+    speaking = [p for p in prepared if p.output_mode != "global" and p.summary
+                and (p.reviewer_id in in_batch or p.counts.get("out_of_diff")
+                     or p.counts.get("in_summary") or p.counts.get("advice"))]
+    summary_body = "\n\n---\n\n".join(p.summary for p in speaking)
     # Comments to deliver through the summary only (out-of-diff, minor, pre-existing).
-    out_of_diff_only = any(p.counts.get("out_of_diff") or p.counts.get("in_summary")
-                           or p.counts.get("advice") for p in prepared)
+    out_of_diff_only = bool(speaking)
 
     if config.dry_run:
         # In dry-run, SHOW what would be posted: that is the whole point of the mode,
