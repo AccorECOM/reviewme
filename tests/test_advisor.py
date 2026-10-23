@@ -188,3 +188,27 @@ def test_bot_recognized_whatever_the_language():
     from reviewme.enrich import _is_bot
     assert _is_bot({"body": "Still relevant. _ReviewMe · automated review_"})
     assert _is_bot({"body": "Toujours. _ReviewMe · review automatisée_"})
+
+
+def test_global_advice_does_not_publish_clean_inline_summaries():
+    """An advisor tip must not drag along the "nothing to report" of the other reviewers."""
+    class GH:
+        def __init__(self):
+            self.posts = []
+
+        def list_issue_comments(self, n):
+            return []
+
+        def post_issue_comment(self, n, body):
+            self.posts.append(body)
+            return {"id": len(self.posts)}
+
+    clean = prepare(PR, _config(), _ctx(), ReviewResult("COMMENT", "Nothing to report.", []),
+                    LOGGER, "tech", prefix="tech")
+    advisor = prepare(PR, _config(), _ctx(), ReviewResult("COMMENT", "s", [], advice=[
+        Advice("Ordering", "Why.", ["src/payments/refund.py"])]),
+        LOGGER, "advisor", output_mode="global", silent_when_clean=True, advice=True)
+    gh = GH()
+    post_all(PR, _config(), gh, [clean, advisor], LOGGER)
+    assert len(gh.posts) == 1 and "Review tip" in gh.posts[0]
+    assert "Nothing to report." not in gh.posts[0]
