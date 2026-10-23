@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.1
 
 - A reviewer with nothing to report no longer posts its summary when another reviewer
   speaks (e.g. a `global` `advisor` tip): only the reviewers with inline comments,
