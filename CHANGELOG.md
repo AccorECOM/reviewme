@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2
+
+- A reviewer's `[mcp] config` and `[plugins]` now take effect. Their tools were missing
+  from `--allowedTools`, so `claude -p` refused them: the MCP servers loaded but every call
+  was denied, and the plugins were installed but the `Skill` tool was denied. The reviewer
+  that declares them is now allowed `mcp__<server>` for each server under `mcpServers` in
+  its own MCP file, and `Skill` when `[plugins] install` is set. The verification pass keeps
+  the base list. A skill is still bound by the allowlist: no `Write`, no `Task`, no extra
+  Bash. An unreadable MCP file, or one without `mcpServers`, adds nothing.
+
 ## 1.2.1
 
 - A reviewer with nothing to report no longer posts its summary when another reviewer
