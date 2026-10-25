@@ -305,7 +305,9 @@ never instructions.
 
 - **Read-only tools**, allowlist locked in code: no `Write`, no sub-agents, never
   `--dangerously-skip-permissions`. Hooks and MCP servers of the reviewed repo are not
-  loaded.
+  loaded. A reviewer that declares its own MCP servers (`[mcp] config`) or plugins
+  (`[plugins] install`) is also allowed their tools (`mcp__<server>`, `Skill`); the
+  verification pass is not. A skill gets no more rights than the allowlist.
 - **A PR cannot change its own review**: when the config lives in the reviewed repo
   (`.reviewme/`), it is read from the base branch, as are `CLAUDE.md` and `.claude/rules/`.
   To try a new reviewer inside its own PR, start a build by hand with

@@ -424,6 +424,7 @@ marketplaces = ["owner/marketplace-repo"]   # added first
 install      = ["my-plugin"]                # or "my-plugin@marketplace"</code></pre>
   <p><b>Idempotent</b>: what is installed is not installed twice. A failure only affects the reviewer concerned.</p>
   <div class="warnbox"><span class="chip c-ko">Third-party code</span> Installing a plugin runs <b>code you did not write</b> in the review environment, alongside the job's secrets. A plugin is reviewed like code. The engine keeps its tool allowlist: a plugin skill gets <b>no more rights</b> than the reviewer that invokes it — which also limits what a heavily tooled plugin can do here.</div>
+  <p><b>Allowed tools.</b> When a reviewer installs plugins, the <code>Skill</code> tool is added to its allowlist, so their skills can load; likewise each MCP server declared in its <code>[mcp] config</code> adds <code>mcp__&lt;server&gt;</code> (all the tools of that server, and only of the servers the reviewer declares itself). These additions apply to <b>the reviewer that declares them, not to the verification pass</b>, which keeps the base list. Never <code>Write</code>, never <code>Task</code>; the reviewed repository's MCP servers are still not loaded.</p>
 </section>
 
 <section class="page" id="projets">
@@ -462,9 +463,9 @@ install      = ["my-plugin"]                # or "my-plugin@marketplace"</code><
     <tr><td class="wrap-first"><code>precheck</code></td><td>path</td><td>empty</td><td>Deterministic script, <b>confined to the reviewer's folder</b>. Receives the repository via <code>--repo</code> and <b>the diff on stdin</b>; its output becomes established facts</td></tr>
     <tr><td class="wrap-first"><code>[when] paths</code></td><td>list of globs</td><td>empty = always runs</td><td>Only triggers if the diff touches one of these paths</td></tr>
     <tr><td class="wrap-first"><code>[context] read</code></td><td>list of paths</td><td>empty</td><td>Conventions read from the reviewed repository. File = injected, folder = inventory</td></tr>
-    <tr><td class="wrap-first"><code>[mcp] config</code></td><td>path</td><td>empty</td><td>MCP server config file, <b>confined to the reviewer's folder</b> — for example up-to-date documentation of third-party libraries</td></tr>
+    <tr><td class="wrap-first"><code>[mcp] config</code></td><td>path</td><td>empty</td><td>MCP server config file, <b>confined to the reviewer's folder</b> — for example up-to-date documentation of third-party libraries. Each server under <code>mcpServers</code> is allowed for this reviewer (<code>mcp__&lt;server&gt;</code>), not for the verification pass</td></tr>
     <tr><td class="wrap-first"><code>[plugins] marketplaces</code></td><td>list</td><td>empty</td><td>Claude Code marketplaces to declare before installation</td></tr>
-    <tr><td class="wrap-first"><code>[plugins] install</code></td><td>list</td><td>empty</td><td>Plugins to install before the review (idempotent)</td></tr>
+    <tr><td class="wrap-first"><code>[plugins] install</code></td><td>list</td><td>empty</td><td>Plugins to install before the review (idempotent). Adds the <code>Skill</code> tool for this reviewer, not for the verification pass</td></tr>
   </table></div>
   <pre><code># full example
 output_mode    = "mixed"

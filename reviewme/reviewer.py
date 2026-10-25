@@ -41,6 +41,15 @@ _ALLOWED_TOOLS = "Read,Glob,Grep,Bash(git log:*),Bash(git show:*),Bash(git diff:
 # reviewed repo (hence from a Pull Request), this would reopen the arbitrary code
 # execution that `_load_instance_env` and the precheck confinement closed.
 # To vary the model by task: create one more reviewer with its own `model`.
+#
+# Only two additions, and only for the reviewer itself (never the verification pass), see
+# `_allowed_tools`: `mcp__<server>` for each MCP server the reviewer declares in its own
+# `[mcp] config` (with `claude -p`, a tool missing from `--allowedTools` is refused, so the
+# server would load but every call would be denied), and `Skill` when it installs
+# `[plugins]` (otherwise no skill of theirs can load). A skill runs inside the same
+# session: it is bound by this same allowlist and grants no extra right — no `Write`, no
+# `Task`, no other Bash. The flags `--setting-sources user` and `--strict-mcp-config`
+# stay: the servers of the reviewed repo are still never loaded.
 _TIMEOUT_S = 900
 
 # Messages the CLI prints when the account's quota is exhausted (plan usage limits:
@@ -167,6 +176,41 @@ def _mcp_config_path(spec: ReviewerSpec) -> Path | None:
     return chemin if chemin.is_file() else None
 
 
+def _mcp_server_names(path: Path | None) -> list[str]:
+    """Server names under `mcpServers` in the reviewer's MCP file. Unreadable = none.
+
+    A broken file must not fail the review: it only grants no MCP tool (the CLI will
+    report the file itself).
+    """
+    if path is None:
+        return []
+    try:
+        servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers")
+    except (OSError, ValueError, AttributeError):
+        return []
+    if not isinstance(servers, dict):
+        return []
+    # Same normalization as the CLI for its `mcp__<server>__<tool>` names. It also keeps a
+    # name from smuggling a `,` or a `Bash(...)` rule into the allowlist.
+    return [re.sub(r"[^A-Za-z0-9_-]", "_", name) for name in servers
+            if isinstance(name, str) and name]
+
+
+def _allowed_tools(spec: ReviewerSpec, mcp: Path | None, reviewer_tools: bool) -> str:
+    """`_ALLOWED_TOOLS` plus the tools the reviewer brings itself (MCP servers, skills).
+
+    `mcp` is the reviewer's resolved MCP file. `reviewer_tools=False` (verification):
+    the base list, unchanged. `mcp__<server>` allows every tool of THAT server only.
+    """
+    if not reviewer_tools:
+        return _ALLOWED_TOOLS
+    tools = [_ALLOWED_TOOLS]
+    tools += [f"mcp__{name}" for name in _mcp_server_names(mcp)]
+    if spec.plugins_install:
+        tools.append("Skill")
+    return ",".join(tools)
+
+
 def pick_model(spec: ReviewerSpec) -> str:
     """Model to use for this reviewer, or "" to let the CLI decide.
 
@@ -181,18 +225,22 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
                timeout: int = _TIMEOUT_S, reviewer_tools: bool = True) -> tuple[str, dict]:
     """A read-only `claude -p` call. Returns (agent text, metadata).
 
-    Shared by the review and the verification pass: same allowlist, same diagnostics.
-    `reviewer_tools=False` (verification): neither the `--agent` agent nor the reviewer's
-    MCP servers — the verifier has its own role, not the "find problems" persona.
+    Shared by the review and the verification pass: same base allowlist, same diagnostics.
+    `reviewer_tools=False` (verification): neither the `--agent` agent, nor the reviewer's
+    MCP servers, nor `Skill` — the verifier has its own role, not the "find problems"
+    persona.
     Raises RuntimeError if the CLI returns nothing usable.
     """
     label = label or spec.id
+    # MCP servers declared by the reviewer (library documentation, internal tooling).
+    # Path CONFINED to its folder: a config can come from a third-party repo.
+    mcp = _mcp_config_path(spec) if reviewer_tools else None
     cmd = [
         _find_claude(config),
         "-p", prompt,
         "--output-format", "json",
         "--max-turns", str(max_turns),
-        "--allowedTools", _ALLOWED_TOOLS,
+        "--allowedTools", _allowed_tools(spec, mcp, reviewer_tools),
         # The reviewed repo is the PR's: its `.claude/settings.json` (hooks = code run
         # with the CI secrets) and `.mcp.json` must not be loaded. Only the runner's
         # user settings, and the MCPs passed through `--mcp-config`.
@@ -206,9 +254,6 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
         cmd.extend(["--agent", config.claude_agent])
     if model:
         cmd.extend(["--model", model])
-    # MCP servers declared by the reviewer (library documentation, internal tooling).
-    # Path CONFINED to its folder: a config can come from a third-party repo.
-    mcp = _mcp_config_path(spec) if reviewer_tools else None
     if mcp:
         cmd.extend(["--mcp-config", str(mcp)])
     if budget > 0:

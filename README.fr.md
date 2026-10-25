@@ -308,7 +308,9 @@ Le diff, le ticket et les commentaires sont écrits par des tiers : ce sont des
 
 - **Outils en lecture seule**, liste verrouillée dans le code : ni `Write`, ni sous-agents,
   ni `--dangerously-skip-permissions`. Ni les hooks ni les serveurs MCP du dépôt relu ne
-  sont chargés.
+  sont chargés. Un relecteur qui déclare ses propres serveurs MCP (`[mcp] config`) ou
+  plugins (`[plugins] install`) a aussi droit à leurs outils (`mcp__<serveur>`, `Skill`) ;
+  la passe de vérification, non. Un skill n'a pas plus de droits que la liste.
 - **Une PR ne change pas sa propre relecture** : si la config vit dans le dépôt relu
   (`.reviewme/`), elle est lue sur la branche de base, tout comme `CLAUDE.md` et
   `.claude/rules/`. Pour tester un nouveau relecteur dans sa PR, on lance un build à la
