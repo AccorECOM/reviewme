@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+
+- Factual review output. The output contract asks for the defect and its trigger in
+  `message` (one sentence) and the fix in `suggestion`, rendered on its own line. The
+  `summary` no longer lists or rephrases findings, describes the PR, or says what was
+  checked or not reported: it is empty when the findings say it all, otherwise one
+  sentence on what no finding carries. `advice.why` is two sentences at most. The core
+  `tech` and `i18n` personas and `common/style.md` follow (no per-language recap).
+- An inline reviewer with an empty summary no longer adds a bare title to the review
+  body, and the review body is signed once instead of once per reviewer.
+- Instance personas that ask for a recap in `summary` keep it: align them with the
+  contract (e.g. "summary" rules in `common/`).
+
 ## 1.2.2
 
 - A reviewer's `[mcp] config` and `[plugins]` now take effect. Their tools were missing
