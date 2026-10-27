@@ -310,6 +310,56 @@ def test_inline_and_global_are_counted_separately():
     assert totals["posted"] == 1               # the total stays correct
 
 
+def test_review_body_signed_once():
+    """Several speaking reviewers share one review body: one footer, not one each."""
+    from reviewme.reconciler import post_all
+
+    class _GH:
+        def __init__(self):
+            self.bodies = []
+        def create_review(self, pr, sha, body, comments, event):
+            self.bodies.append(body)
+            return {}
+        def list_review_comments(self, pr, review_id=None):
+            return []
+
+    ctx = _ctx()
+    tech = prepare(PR, _config(), ctx, _result([_finding()]), LOGGER, "tech", prefix="[TECH]")
+    i18n = prepare(PR, _config(), ctx, _result([_finding()]), LOGGER, "i18n", prefix="[I18N]")
+    gh = _GH()
+    post_all(PR, _config(dry_run=False), gh, [tech, i18n], LOGGER)
+    body = gh.bodies[0]
+    assert "— tech" in body and "— i18n" in body
+    assert body.count("automated review_") == 1 and body.rstrip().endswith(f"`{PR['head']['sha'][:8]}`")
+
+
+def test_empty_summary_leaves_only_the_signature():
+    """Findings that say it all: no bare reviewer title, the review body is the signature."""
+    from reviewme.reconciler import post_all
+
+    class _GH:
+        def __init__(self):
+            self.bodies = []
+        def create_review(self, pr, sha, body, comments, event):
+            self.bodies.append(body)
+            return {}
+
+    prep = prepare(PR, _config(), _ctx(), _result([_finding()], summary=""), LOGGER, "tech")
+    assert prep.summary == "" and len(prep.batch) == 1
+    gh = _GH()
+    post_all(PR, _config(dry_run=False), gh, [prep], LOGGER)
+    assert gh.bodies == [f"_ReviewMe · automated review_ · commit `{PR['head']['sha'][:8]}`"]
+
+
+def test_suggestion_on_its_own_line():
+    """The fix is set apart from the defect: the reader finds it without reading it all."""
+    f = _finding()
+    f.suggestion = "Unwrap with `guard let`."
+    prep = prepare(PR, _config(), _ctx(), _result([f]), LOGGER, "tech")
+    body = prep.batch[0]["body"]
+    assert body.index("Souci ici") < body.index("_Suggestion:_ Unwrap with `guard let`.")
+
+
 # --------------------------------------------------------------- lifecycle on a new commit
 
 def _existing_comment(ctx, finding, reviewer="tech", position=3, cid=1):

@@ -51,4 +51,4 @@ convention, check that it is written somewhere: look at the root (`README.md`,
 `CONTRIBUTING.md`), at documentation folders (`docs/`, `doc/`, `documentation/`,
 `architecture/`), and at tool configurations (linter, formatter), which are authoritative
 on style. If nothing is written, judge on consistency with the code around the change and
-say so in `summary`.
+say so in the finding's `evidence`.

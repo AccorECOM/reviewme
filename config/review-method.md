@@ -43,8 +43,8 @@ For each candidate, look for the proof in the code before keeping it:
 
 Keep only what you have proven. For each finding kept:
 - write in `evidence` what you observed and where (`file:line`, result of a `grep`, commit);
-- say in `message` what breaks, in which situation, and the corrective action — a finding
-  without a concrete fix is not finished;
+- say in `message` what breaks and in which situation, and in `suggestion` the corrective
+  action — a finding without a concrete fix is not finished;
 - set the severity from the consequence in THIS project: the same missing index is
   `MINOR` on a 50-row table and `BLOCKER` on a hot table.
 
