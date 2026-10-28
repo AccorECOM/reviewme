@@ -10,10 +10,15 @@ technical content.
 - No polite compliments, no preamble. Get to the point.
 
 ## Shape of a remark
-- Say **what is wrong**, then **the corrective action**. No essays.
+- Say **what is wrong** (`message`), then **the corrective action** (`suggestion`). No
+  essays.
 - Cite the symbol or the line in question rather than describing it.
 - If you are not sure, say so and lower the `confidence` — do not phrase a hypothesis as
   a fact.
+
+## The summary
+- Empty when the remarks say it all; otherwise one sentence on what no remark carries.
+- Never describe what the PR does, what you checked, or what you chose not to report.
 
 ## What we never report
 - A **pre-existing** problem outside the scope of the diff.

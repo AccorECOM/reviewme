@@ -131,8 +131,12 @@ def _comment_body(finding, marker: str, prefix: str = "", lang: str = "en") -> s
     return "\n".join(lines)
 
 
+def _footer(head_sha: str, lang: str = "en") -> str:
+    return f"\n---\n{t('signature', lang)} · commit `{head_sha[:8]}`"
+
+
 def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
-                  title: str = "", *,
+                  title: str = "", *, signed: bool = True,
                   retained: list | None = None, unverified: int = 0,
                   minor: list | None = None, preexisting: list | None = None,
                   advice: list | None = None, lang: str = "en") -> str:
@@ -142,6 +146,9 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
     The synthesis written by the model describes ALL its findings, including those that
     verification discarded: posting it would bring them back through the back door. In
     that case, only the retained points are included, as a list.
+
+    `signed=False`: no footer, for a summary that is joined with other reviewers' into
+    one review body, signed once (one footer per reviewer was pure noise).
     """
     parts = [f"## {title or t('review_title', lang)}"]
     if result.summary and not unverified:
@@ -172,13 +179,14 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
         parts.append("\n" + t("out_of_diff_header", lang))
         for f in out_of_diff:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} {_scrub(f.message)}")
-    parts.append(f"\n---\n{t('signature', lang)} · commit `{head_sha[:8]}`")
+    if signed:
+        parts.append(_footer(head_sha, lang))
     return "\n".join(parts)
 
 
 def _degraded_body(summary_body: str, batch: list, lang: str = "en") -> str:
     """Fallback: inline failed (residual 422) -> everything in one global comment."""
-    parts = [summary_body, "\n" + t("degraded_header", lang)]
+    parts = [p for p in (summary_body, "\n" + t("degraded_header", lang)) if p]
     for c in batch:
         body = _MARKER_RE.sub("", c["body"]).strip()
         parts.append(f"- `{_scrub(c['path'])}:{c['line']}` — {body}")
@@ -346,11 +354,15 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
     title = (t("review_title_reviewer", lang, reviewer=reviewer_id) if prefix
              else t("review_title", lang))
     prep.summary = _guard(_summary_body(
-        result, out_of_diff, head_sha, title,
+        result, out_of_diff, head_sha, title, signed=False,
         retained=inline if output_mode == "global" else None,
         unverified=counts["dropped_unverified"], minor=minor, preexisting=preexisting,
         advice=conseils, lang=lang),
         logger, pr_number)
+    # An inline reviewer whose findings say it all leaves `summary` empty (output
+    # contract): its section would be a bare title above the other reviewers' text.
+    if output_mode != "global" and prep.summary == f"## {title}":
+        prep.summary = ""
 
     # --- `global` mode: a single comment, updated from commit to commit ---
     if output_mode == "global":
@@ -367,7 +379,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             logger.info("PR #%s [%s]: nothing to report, no comment (silent_when_clean)",
                         pr_number, reviewer_id)
             return prep
-        prep.global_body = f"{prep.summary}\n\n{marker}"
+        prep.global_body = f"{prep.summary}\n{_footer(head_sha, lang)}\n\n{marker}"
         prep.global_update_id = existing.get("id") if existing else None
         for f in inline:
             f.fate, f.in_summary = "posted", True
@@ -504,6 +516,10 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
                 and (p.reviewer_id in in_batch or p.counts.get("out_of_diff")
                      or p.counts.get("in_summary") or p.counts.get("advice"))]
     summary_body = "\n\n---\n\n".join(p.summary for p in speaking)
+    # Signed once, and the signature alone when every reviewer's findings say it all.
+    lang = prepared[0].language if prepared else "en"
+    signed_body = (f"{summary_body}\n{_footer(head_sha, lang)}" if summary_body
+                   else _footer(head_sha, lang).removeprefix("\n---\n"))
     # Comments to deliver through the summary only (out-of-diff, minor, pre-existing).
     out_of_diff_only = bool(speaking)
 
@@ -530,15 +546,15 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
     if batch:
         api_batch = [_api_comment(c) for c in batch]
         try:
-            review = gh.create_review(pr_number, head_sha, summary_body, api_batch, event="COMMENT")
+            review = gh.create_review(pr_number, head_sha, signed_body, api_batch, event="COMMENT")
             totals["posted_inline"] = len(api_batch)
             totals["posted"] = len(api_batch)
             _attach_comment_ids(gh, pr_number, review, batch, logger)
         except GitHubApiError as e:
             if e.status_code == 422:
                 logger.warning("PR #%s: 422 on the review batch, global comment fallback", pr_number)
-                repli = gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch,
-                                                                               prepared[0].language),
+                repli = gh.post_issue_comment(pr_number, _guard(_degraded_body(summary_body, api_batch, lang)
+                                                                + "\n" + _footer(head_sha, lang),
                                                                 logger, pr_number))
                 for c in batch:
                     if c.get("_finding") is not None:
@@ -553,7 +569,7 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
         # posting one on every push would drown the conversation.
         # NB: a completely clean PR does NOT get a comment.
         marker = summary_fingerprint("resume")
-        body = f"{summary_body}\n\n{marker}"
+        body = f"{signed_body}\n\n{marker}"
         existing = next((c for c in gh.list_issue_comments(pr_number)
                          if marker_key(c.get("body", "")) == marker_key(marker)), None)
         if existing:

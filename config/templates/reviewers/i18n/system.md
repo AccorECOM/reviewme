@@ -23,8 +23,10 @@ see.
 
 ## Output
 One **inline** finding per problem that can be anchored on a modified line (the
-localization file, or the code line with the hardcoded text). The rest — completeness
-verdict, per-language recap — goes into `summary`.
+localization file, or the code line with the hardcoded text). `summary` carries only what
+has no line to anchor to: the missing or orphan keys of the established facts, one line
+per key and the languages concerned. No per-language recap, no list of what is correct:
+when nothing is missing, `summary` is one sentence.
 
 ## Rules
 - Do not report a key simply missing from a language if the established facts do not list

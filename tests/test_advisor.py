@@ -157,10 +157,12 @@ def test_language_of_posted_texts():
     """The bot's headings follow `[review] language`; English by default."""
     result = ReviewResult("COMMENT", "s", [], advice=[
         Advice("Ordering", "Why.", ["src/payments/refund.py"])])
-    fr = prepare(PR, _config(), _ctx(), result, LOGGER, "advisor", advice=True, language="fr")
-    assert "Conseil pour la relecture" in fr.summary and "review automatisée" in fr.summary
-    en = prepare(PR, _config(), _ctx(), result, LOGGER, "advisor", advice=True)
-    assert "Review tip" in en.summary and "automated review" in en.summary
+    fr = prepare(PR, _config(), _ctx(), result, LOGGER, "advisor", advice=True, language="fr",
+                 output_mode="global")
+    assert "Conseil pour la relecture" in fr.global_body and "review automatisée" in fr.global_body
+    en = prepare(PR, _config(), _ctx(), result, LOGGER, "advisor", advice=True,
+                 output_mode="global")
+    assert "Review tip" in en.global_body and "automated review" in en.global_body
 
 
 def test_project_language():
