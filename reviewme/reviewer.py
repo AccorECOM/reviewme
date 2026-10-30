@@ -52,6 +52,16 @@ _ALLOWED_TOOLS = "Read,Glob,Grep,Bash(git log:*),Bash(git show:*),Bash(git diff:
 # stay: the servers of the reviewed repo are still never loaded.
 _TIMEOUT_S = 900
 
+# A call that reads nothing but its prompt (`reviewme triage`): `--tools ""` removes every
+# built-in tool from the session, and the explicit deny list is the second lock in case a
+# CLI or wrapper ignores `--tools`. No `--allowedTools` at all: an empty allowlist is not
+# the same as no tools, a permission mode could still approve one. MCP stays off through
+# `--strict-mcp-config` with no `--mcp-config`.
+_NO_TOOLS_ARGS = ("--tools", "",
+                  "--disallowedTools",
+                  "Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,LS,WebFetch,"
+                  "WebSearch,Task,Agent,Skill,TodoWrite")
+
 # Messages the CLI prints when the account's quota is exhausted (plan usage limits:
 # "Claude AI usage limit reached|<epoch>", "5-hour limit reached · resets 3pm", "You've
 # hit your limit") or when the API pushes back (429, overloaded). Only checked on a
@@ -222,16 +232,21 @@ def pick_model(spec: ReviewerSpec) -> str:
 
 def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: int,
                model: str = "", budget: float = 0.0, label: str = "",
-               timeout: int = _TIMEOUT_S, reviewer_tools: bool = True) -> tuple[str, dict]:
+               timeout: int = _TIMEOUT_S, reviewer_tools: bool = True,
+               no_tools: bool = False, cwd: str | None = None) -> tuple[str, dict]:
     """A read-only `claude -p` call. Returns (agent text, metadata).
 
     Shared by the review and the verification pass: same base allowlist, same diagnostics.
     `reviewer_tools=False` (verification): neither the `--agent` agent, nor the reviewer's
     MCP servers, nor `Skill` — the verifier has its own role, not the "find problems"
     persona.
+    `no_tools=True` (triage): NO tool at all, the whole input is in the prompt. Implies
+    `reviewer_tools=False`. `cwd` = where the CLI runs (default: the reviewed repo); the
+    triage passes an empty folder so not even a `CLAUDE.md` is picked up.
     Raises RuntimeError if the CLI returns nothing usable.
     """
     label = label or spec.id
+    reviewer_tools = reviewer_tools and not no_tools
     # MCP servers declared by the reviewer (library documentation, internal tooling).
     # Path CONFINED to its folder: a config can come from a third-party repo.
     mcp = _mcp_config_path(spec) if reviewer_tools else None
@@ -240,7 +255,8 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
         "-p", prompt,
         "--output-format", "json",
         "--max-turns", str(max_turns),
-        "--allowedTools", _allowed_tools(spec, mcp, reviewer_tools),
+        *(_NO_TOOLS_ARGS if no_tools
+          else ("--allowedTools", _allowed_tools(spec, mcp, reviewer_tools))),
         # The reviewed repo is the PR's: its `.claude/settings.json` (hooks = code run
         # with the CI secrets) and `.mcp.json` must not be loaded. Only the runner's
         # user settings, and the MCPs passed through `--mcp-config`.
@@ -265,10 +281,10 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
     if config.debug:
         argv = [f"<prompt {len(prompt)} bytes>" if a is prompt else a for a in cmd]
         _log.info("[%s] invocation: %s", label, " ".join(argv))
-        _log.info("[%s] cwd=%s", label, config.repo_path)
+        _log.info("[%s] cwd=%s", label, cwd or config.repo_path)
 
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, cwd=config.repo_path,
+        cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd or config.repo_path,
     )
 
     # claude can exit with code != 0 while having ALREADY emitted a usable JSON envelope
