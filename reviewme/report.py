@@ -1,15 +1,13 @@
-"""Standalone HTML report built from the aggregated statistics.
+"""Legacy HTML report built from `stats.json` only (deprecated).
+
+`reviewme stats --html` now writes the ledger-driven dashboard (`reviewme/dashboard/`),
+which carries everything this page did and much more. This module stays for callers that
+only have `stats.json` (no ledger): same page as before, now drawn with the dashboard's
+palette and chart helpers (`dashboard/charts.py`) so the two cannot drift apart.
 
 A page with no dependency and no network request: open it, attach it, publish it. It
 only contains counters — no PR title, no code excerpt (see `stats.py`), so it can be
 shared without special precautions.
-
-Form choices: totals are **numbers**, not charts — a one-bar histogram teaches nothing.
-Only series (activity per PR, activity per author) are plotted, one series each: no
-categorical color, hence no legend.
-
-Palette validated on a cream background (6 checks: lightness band, chroma, color-blind
-separation, normal-vision floor, contrast). Do not change it without revalidating.
 """
 from __future__ import annotations
 
@@ -17,37 +15,11 @@ import html
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .dashboard import charts as C
 from .stats import _charger, resume
 
-ACCENT = "#7C3AED"          # violet — main series
-ENCRE = "#111111"
-MUET = "#55504C"
-FOND = "#FAF4F0"
-CARTE = "#FFFFFF"
-
-_CSS = """
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;padding:28px;background:%(fond)s;color:%(encre)s;
-  font:14px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif}
-.wrap{max-width:960px;margin:0 auto}
-h1{font-size:clamp(26px,4vw,36px);font-weight:900;letter-spacing:-.02em;margin:0 0 4px}
-h2{font-size:16px;font-weight:800;margin:32px 0 12px}
-.sub{color:%(muet)s;margin:0 0 24px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-.tile{background:%(carte)s;border:2px solid %(encre)s;border-radius:3px;
-  box-shadow:4px 4px 0 %(encre)s;padding:14px 16px}
-.tile .n{font-size:26px;font-weight:900;font-variant-numeric:tabular-nums;line-height:1.1}
-.tile .l{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;
-  color:%(muet)s;margin-top:6px}
-.card{background:%(carte)s;border:2px solid %(encre)s;border-radius:3px;
-  box-shadow:4px 4px 0 %(encre)s;padding:16px;overflow-x:auto}
-table{border-collapse:collapse;width:100%%;font-size:13px}
-th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;
-  background:#F3EAE4;padding:8px 10px;border-bottom:2px solid %(encre)s}
-td{padding:7px 10px;border-bottom:1px solid #DDD3CC;font-variant-numeric:tabular-nums}
-.foot{margin-top:32px;padding-top:14px;border-top:2px solid %(encre)s;
-  font-size:11.5px;color:%(muet)s}
-""" % {"fond": FOND, "encre": ENCRE, "muet": MUET, "carte": CARTE}
+ACCENT, ENCRE, MUET, FOND, CARTE = C.ACCENT, C.ENCRE, C.MUET, C.FOND, C.CARTE
+_CSS = C.CSS
 
 
 def _taux(r: dict) -> str:
@@ -63,63 +35,16 @@ def _taux(r: dict) -> str:
 
 
 def _tuile(valeur: str, label: str) -> str:
-    return f'<div class="tile"><div class="n">{valeur}</div><div class="l">{html.escape(label)}</div></div>'
+    return C.tile(valeur, label)
 
 
 def _barres(donnees: list[tuple[str, float]], unite: str, hauteur: int = 190) -> str:
-    """Vertical bars, a single series — hence no legend and no categorical color."""
-    if not donnees:
-        return f'<p style="color:{MUET}">No data yet.</p>'
-
-    largeur, marge_g, marge_b = 900, 44, 34
-    plot_h = hauteur - marge_b - 14
-    maxi = max(v for _, v in donnees) or 1
-    pas = (largeur - marge_g - 12) / len(donnees)
-    barre = max(6, min(38, pas - 6))          # 6 px gutter: the fills do not touch
-
-    out = [f'<svg viewBox="0 0 {largeur} {hauteur}" width="100%" role="img" '
-           f'style="max-width:{largeur}px;font-family:inherit">']
-    # grid: three markers, deliberately subtle
-    for i in range(4):
-        y = 14 + plot_h * i / 3
-        val = maxi * (3 - i) / 3
-        out.append(f'<line x1="{marge_g}" y1="{y:.1f}" x2="{largeur-12}" y2="{y:.1f}" '
-                   f'stroke="#DDD3CC" stroke-width="1"/>')
-        out.append(f'<text x="{marge_g-8}" y="{y+4:.1f}" text-anchor="end" font-size="10" '
-                   f'fill="{MUET}">{val:.2f}'.rstrip("0").rstrip(".") + "</text>")
-    for i, (label, val) in enumerate(donnees):
-        h = max(2, plot_h * val / maxi)
-        x = marge_g + i * pas + (pas - barre) / 2
-        y = 14 + plot_h - h
-        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{barre:.1f}" height="{h:.1f}" '
-                   f'rx="4" fill="{ACCENT}"><title>{html.escape(label)} — {val}{unite}</title></rect>')
-        if len(donnees) <= 16:
-            out.append(f'<text x="{x+barre/2:.1f}" y="{hauteur-12}" text-anchor="middle" '
-                       f'font-size="10" fill="{MUET}">{html.escape(label)}</text>')
-    out.append("</svg>")
-    return "".join(out)
+    return C.bars(donnees, lambda v: f"{v:.2f}".rstrip("0").rstrip(".") + unite,
+                  height=hauteur)
 
 
 def _barres_h(donnees: list[tuple[str, float, str]]) -> str:
-    """Horizontal bars: the label is readable, the value is written at the end."""
-    if not donnees:
-        return f'<p style="color:{MUET}">No data yet.</p>'
-    largeur, ligne = 900, 30
-    hauteur = len(donnees) * ligne + 10
-    maxi = max(v for _, v, _ in donnees) or 1
-    label_w, place_valeur = 160, 200   # the value label always fits on the right
-    out = [f'<svg viewBox="0 0 {largeur} {hauteur}" width="100%" role="img" '
-           f'style="max-width:{largeur}px;font-family:inherit">']
-    for i, (label, val, suffixe) in enumerate(donnees):
-        y = i * ligne + 6
-        w = max(2, (largeur - label_w - place_valeur) * val / maxi)
-        out.append(f'<text x="0" y="{y+14}" font-size="12" fill="{ENCRE}">{html.escape(label[:24])}</text>')
-        out.append(f'<rect x="{label_w}" y="{y+3}" width="{w:.1f}" height="16" rx="4" '
-                   f'fill="{ACCENT}"><title>{html.escape(label)} — {suffixe}</title></rect>')
-        out.append(f'<text x="{label_w+w+8:.1f}" y="{y+16}" font-size="11.5" '
-                   f'fill="{MUET}" font-variant-numeric="tabular-nums">{html.escape(suffixe)}</text>')
-    out.append("</svg>")
-    return "".join(out)
+    return C.hbars(donnees)
 
 
 def generer(chemin_stats: Path | None = None) -> str:

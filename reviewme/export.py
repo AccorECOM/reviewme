@@ -1,11 +1,13 @@
 """`reviewme export --since 7d --out DIR`: the end-of-period artifact, in two outputs.
 
 - **Machine**: `reviewme-artifact-<date>.tar.gz` — `findings.jsonl`, `runs.jsonl`,
-  `enrich.jsonl`, `prs.jsonl` (filtered on the window), `config-snapshot/`, `stats.json`,
+  `enrich.jsonl`, `prs.jsonl`, `triage.jsonl` (filtered on the window; the triage's
+  `reason` and pattern texts only with `include_text`), `config-snapshot/`, `stats.json`,
   `quality.json` (the already-computed quality block) and `SCHEMA.md`, which describes
   every field. This is what an analysis is given to judge the settings.
 - **Human**: `weekly-report.md`, readable as-is in GitHub or Slack — the usual stats,
-  then "fun" stats that keep the 👍/👎 loop alive.
+  then "fun" stats that keep the 👍/👎 loop alive — and `dashboard.html`, the same window
+  as a standalone page (`reviewme/dashboard/`).
 
 The report NEVER names a developer in connection with a negative finding: the only
 rankings of people are about participation.
@@ -26,9 +28,11 @@ from .enrich import ENRICH_FILE, PRS_FILE
 from .ledger import FINDINGS_FILE, RUNS_FILE, SNAPSHOT_DIR, read_all
 from .quality import compute, latest
 from .stats import STATS_FILE
+from .triage import TRIAGE_FILE
 
 SCHEMA_DOC = ROOT_DIR / "docs" / "ledger-schema.md"
 REPORT_FILE = "weekly-report.md"
+DASHBOARD_FILE = "dashboard.html"
 
 
 _LOGIN_KEYS = ("user", "author", "resolved_by")
@@ -66,7 +70,21 @@ def _window(rows: list[dict], limite: str) -> list[dict]:
 def load(root: Path, since: timedelta | None = None) -> dict[str, list[dict]]:
     limite = (datetime.now(UTC) - since).isoformat(timespec="seconds") if since else ""
     return {name: _window(read_all(root, name), limite)
-            for name in (FINDINGS_FILE, RUNS_FILE, ENRICH_FILE, PRS_FILE)}
+            for name in (FINDINGS_FILE, RUNS_FILE, ENRICH_FILE, PRS_FILE, TRIAGE_FILE)}
+
+
+def strip_triage_text(row: dict) -> dict:
+    """A `triage.jsonl` row without what the model wrote about the PRs.
+
+    `reason` paraphrases a reply, a pattern's `title` and `suggested_rule` summarise human
+    comments: PR content, like `message`. Without `include_text` the archive keeps the
+    cause, the counts and the ids, enough to measure; never the prose.
+    """
+    out = {k: v for k, v in row.items() if k != "reason"}
+    if isinstance(row.get("patterns"), list):
+        out["patterns"] = [{k: v for k, v in p.items() if k not in ("title", "suggested_rule")}
+                           for p in row["patterns"] if isinstance(p, dict)]
+    return out
 
 
 def quality_of(data: dict[str, list[dict]]) -> dict:
@@ -243,10 +261,26 @@ def _fun(q: dict, runs: list[dict], enrich: list[dict], findings: list[dict],
 
 # --------------------------------------------------------------------------- archive
 
+def _dashboard(root: Path, since: timedelta, settings, language: str,
+               stats_file: Path | None, *, masked: bool = False) -> str:
+    """The dashboard on the export's window (not `[stats] window`: the archive and the page
+    must describe the same rows). In the archive, names are masked like the JSONL."""
+    import dataclasses
+
+    from .dashboard import StatsSettings, build
+    settings = dataclasses.replace(settings or StatsSettings.default(), window_override=since)
+    if masked:
+        settings = dataclasses.replace(settings, names="masked")
+    return build(root, settings, language, stats_file)[0]
+
+
 def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
            since_label: str = "", stats_file: Path | None = None,
-           language: str = "en") -> tuple[Path, Path]:
-    """Write the machine archive and the human report. Returns (archive, report)."""
+           language: str = "en", settings=None) -> tuple[Path, Path]:
+    """Write the machine archive, the human report and the dashboard. Returns
+    (archive, report); `dashboard.html` is written next to the report.
+
+    `settings` = `dashboard.StatsSettings` of the project (default page otherwise)."""
     data = load(root, since)
     q = quality_of(data)
     rapport = report(data, q, repo, since_label, language)
@@ -256,7 +290,10 @@ def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / f"reviewme-artifact-{date}"
         staging.mkdir()
+        with_text = bool(getattr(settings, "include_text", False))
         for name, rows in data.items():
+            if name == TRIAGE_FILE and not with_text:
+                rows = [strip_triage_text(r) for r in rows]
             (staging / name).write_text(
                 "".join(json.dumps(pseudonymize(r), ensure_ascii=False) + "\n" for r in rows),
                 encoding="utf-8")
@@ -274,6 +311,8 @@ def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
         if SCHEMA_DOC.is_file():
             shutil.copy(SCHEMA_DOC, staging / "SCHEMA.md")
         (staging / REPORT_FILE).write_text(rapport, encoding="utf-8")
+        (staging / DASHBOARD_FILE).write_text(
+            _dashboard(root, since, settings, language, stats, masked=True), encoding="utf-8")
 
         archive = out_dir / f"reviewme-artifact-{date}.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
@@ -281,4 +320,6 @@ def export(root: Path, out_dir: Path, since: timedelta, *, repo: str = "",
 
     rapport_path = out_dir / REPORT_FILE
     rapport_path.write_text(rapport, encoding="utf-8")
+    (out_dir / DASHBOARD_FILE).write_text(
+        _dashboard(root, since, settings, language, stats_file or STATS_FILE), encoding="utf-8")
     return archive, rapport_path
