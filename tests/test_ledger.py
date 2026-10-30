@@ -180,6 +180,17 @@ def test_baseline_variant(monkeypatch):
     assert {r["variant"] for r in rows + runs} == {"baseline"}
 
 
+def test_trigger_on_every_row(monkeypatch):
+    monkeypatch.delenv("REVIEWME_TRIGGER", raising=False)
+    with tempfile.TemporaryDirectory() as tmp:
+        _, rows, runs = _record(tmp)
+    assert {r["trigger"] for r in rows + runs} == {"unknown"}
+    monkeypatch.setenv("REVIEWME_TRIGGER", " pr_build ")
+    with tempfile.TemporaryDirectory() as tmp:
+        _, rows, runs = _record(tmp)
+    assert {r["trigger"] for r in rows + runs} == {"pr_build"}
+
+
 def test_simulated_mode_writes_separately(monkeypatch):
     monkeypatch.delenv("REVIEWME_LEDGER_DIR", raising=False)
     assert ledger.ledger_dir(_config(fake=True)).name == "ledger-fake"

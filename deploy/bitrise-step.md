@@ -66,6 +66,7 @@ cd /tmp/reviewme && uv sync --frozen
 export REVIEWME_CONFIG_HOME="$BITRISE_SOURCE_DIR/.reviewme"
 export PROJECT=my-project
 export REPO_PATH="$BITRISE_SOURCE_DIR"
+export REVIEWME_TRIGGER=pr_build      # recorded in the ledger
 uv run reviewme review --pr "$PR"
 ```
 
@@ -83,6 +84,7 @@ configuration that judges it.
 | `PROJECT` | Workflow env | Which project of the instance to use |
 | `REPO_PATH` | `$BITRISE_SOURCE_DIR` | The clone to explore to put findings in context |
 | `PR_NUMBER` | `$BITRISE_PULL_REQUEST` | The PR to review |
+| `REVIEWME_TRIGGER` | `pr_build` | Recorded in the ledger: separates PR builds from manual (`manual`) and scheduled (`schedule`) runs |
 
 ## Ephemeral runner: what it implies
 
@@ -94,6 +96,11 @@ configuration that judges it.
 
 Do **not** export `data/` as a build artifact to work around it: artifacts can be
 downloaded by anyone with access to the build, and `data/` contains the content of real PRs.
+
+A scheduled workflow that runs `reviewme enrich --since 14d` (nightly) can also run
+`reviewme triage --since 7d` once a week, after `enrich`: it needs `[ledger] include_text
+= true` and a persisted ledger, calls the model with no tool, and costs at most
+`[stats.triage] max_budget_usd` (0.50 $ by default) per pass.
 
 ## First hookup
 

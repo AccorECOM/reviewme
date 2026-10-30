@@ -479,6 +479,69 @@ def test_stats_have_no_content_and_are_idempotent():
         assert set(r["par_auteur"]) == {"alice", "bob"}
 
 
+def test_engagement_counters_take_the_last_run_of_each_pr():
+    """`remarques_*` are a per-PR snapshot: last run per PR, summed across PRs.
+    A `max` over every run reported the busiest PR alone."""
+    from reviewme.stats import enregistrer, resume
+
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "stats.json"
+        enregistrer(1, "a" * 12, "x", "p", [], {"remarques_ouvertes": 5,
+                                                "remarques_avec_reponse": 1}, 0, 0, 0, LOGGER, f)
+        enregistrer(1, "b" * 12, "x", "p", [], {"remarques_ouvertes": 3,
+                                                "remarques_avec_reponse": 2}, 0, 0, 0, LOGGER, f)
+        enregistrer(2, "c" * 12, "y", "p", [], {"remarques_ouvertes": 4,
+                                                "remarques_avec_reponse": 1}, 0, 0, 0, LOGGER, f)
+        r = resume(f)
+    assert r["remarques_ouvertes"] == 7               # 3 (PR 1, last run) + 4 (PR 2)
+    assert r["remarques_avec_reponse"] == 3           # 2 + 1
+
+
+def test_stats_record_the_real_run_duration(monkeypatch):
+    """The run lasts as long as its slowest reviewer; `counts` never carried it."""
+    import reviewme.run as R
+
+    monkeypatch.setenv("FETCH_BASE_TIMEOUT", "0")
+    specs = [_spec("tech"), _spec("us")]
+    project = ProjectConfig(name="p", directory=None, reviewers=tuple(specs))
+    durations = {"tech": 42_000, "us": 9_000}
+
+    def one(spec, *a, **kw):
+        res = _result([])
+        res.metadata.update({"duration_ms": durations[spec.id], "cost_usd": 0.1})
+        return spec, res
+
+    captured = {}
+    monkeypatch.setattr(R, "config_from_base", lambda config, *a, **kw: config)
+    monkeypatch.setattr(R, "resolve_project", lambda config: project)
+    monkeypatch.setattr(R, "_gather_context", lambda *a: ({}, set()))
+    monkeypatch.setattr(R, "build_history_context", lambda *a: "")
+    monkeypatch.setattr(R, "_run_one", one)
+    monkeypatch.setattr(R, "load_pr_context", lambda *a, **kw: _ctx())
+    monkeypatch.setattr(R, "_tag_preexisting", lambda *a, **kw: None)
+    monkeypatch.setattr(R, "post_all", lambda *a, **kw: {"posted": 0})
+    monkeypatch.setattr(R, "save_review", lambda n, payload: captured.update(review=payload))
+    monkeypatch.setattr(R, "mark_reviewed", lambda *a, **kw: None)
+    monkeypatch.setattr(R, "enregistrer_stats",
+                        lambda *a, **kw: captured.update(stats=a))
+    import reviewme.ledger as L
+    monkeypatch.setattr(L, "record", lambda *a, **kw: "run")
+
+    class _GH:
+        def get_pr_diff(self, n):
+            return "+++ b/a.swift\n@@ -1 +1 @@\n+let x = 1\n"
+
+        def get_pr_files(self, n):
+            return [{"filename": "a.swift"}]
+
+    pr = {"number": 7, "head": {"sha": "a" * 40}, "base": {"ref": "main"}, "title": "t",
+          "user": {"login": "alice"}}
+    out = R._run_review(pr, _config(dry_run=True), _GH(), LOGGER, force=True, workdir="/tmp")
+    assert "error" not in out, out
+    assert captured["stats"][7] == 42_000             # duree_ms argument of `enregistrer`
+    assert captured["review"]["duration_ms"] == 42_000
+
+
 def test_unreadable_stats_do_not_blockk():
     from reviewme.stats import enregistrer, resume
 

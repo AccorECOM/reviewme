@@ -55,6 +55,7 @@ _CONTRACT_FILE = CONFIG_DIR / "output-contract.md"
 #: overridable, like the contract).
 _METHOD_FILE = CONFIG_DIR / "review-method.md"
 _VERIFY_FILE = CONFIG_DIR / "verify-method.md"
+_TRIAGE_FILE = CONFIG_DIR / "triage-method.md"
 DEFAULT_MAX_TURNS = 30
 DEFAULT_VERIFY_MAX_TURNS = 15
 
@@ -71,6 +72,38 @@ KNOWN_CONTEXTS = {
 
 class ProjectConfigError(RuntimeError):
     """Missing or invalid project config — we prefer to fail early and clearly."""
+
+
+#: Dashboard sections (`[stats] sections`), in their default menu order.
+STATS_SECTIONS = ("summary", "quality", "usage", "cost", "roi", "reliability", "tuning",
+                  "history", "hall_of_fame")
+#: Enabled when `[stats] sections` is absent: all of them. `history` says how to fill it
+#: (`reviewme history`) until its file exists; `roi` shows its measured levels and says
+#: why the estimate is hidden until `[stats.roi]` exists.
+STATS_DEFAULT_SECTIONS = STATS_SECTIONS
+STATS_NAMES = ("login", "masked")
+STATS_PERIODS = ("week", "sprint")
+#: GitHub reaction contents -> judgment of the finding. A project with other habits (👀
+#: for "seen, wrong") remaps them; the dashboard only reads this vocabulary.
+STATS_DEFAULT_JUDGMENT = (("useful", ("+1", "hooray")), ("wrong", ("-1",)),
+                          ("off_topic", ("confused",)), ("saved_me", ("rocket",)))
+#: `[stats.roi]`: the assumptions of the ROI page's estimate. `hourly_cost` is required
+#: (no default could be right for every team); the others default to these values.
+#: `usd_rate` converts the API cost (always in USD) into `currency`.
+STATS_ROI_DEFAULTS = (("usd_rate", 1.0), ("minutes_per_finding", 12.0),
+                      ("minutes_per_blocker", 240.0))
+STATS_ROI_NUMERIC = ("hourly_cost", "usd_rate", "minutes_per_finding", "minutes_per_blocker",
+                     "human_first_review_hours")
+STATS_ROI_DEFAULT_CURRENCY = "EUR"
+_STATS_KEYS = {"sections", "names", "window", "period", "sprint_anchor",
+               "sprint_anchor_number", "sprint_length_days", "judgment", "roi",
+               "control_group", "bot_since", "triage", "eras", "debrief"}
+#: `[[stats.eras]]`: named periods of the history and ROI pages.
+STATS_ERA_KEYS = {"name", "since", "label", "bot_login"}
+#: `[stats.triage]`: the optional LLM classification of contested findings (`reviewme
+#: triage`). Off the review path entirely: these only size and name that one call.
+STATS_TRIAGE_KEYS = {"enabled", "model", "max_budget_usd"}
+STATS_TRIAGE_DEFAULT_BUDGET = 0.50
 
 
 @dataclass(frozen=True)
@@ -120,6 +153,26 @@ class ProjectConfig:
     language: str = "en"                   # language of comments and posted texts
     ledger_include_text: bool = False      # `[ledger] include_text` from project.toml: does
                                            # the ledger keep the text of the comments?
+    # `[stats]` from project.toml: what the dashboard shows and how. Tuples, not lists or
+    # dicts, so the config stays hashable like the rest of this frozen object.
+    stats_sections: tuple[str, ...] = STATS_DEFAULT_SECTIONS
+    stats_names: str = "login"             # "masked" = dev_1, dev_2… instead of logins
+    stats_window: str = "90d"              # `enrich.parse_since` syntax
+    stats_period: str = "week"             # "week" | "sprint"
+    stats_sprint_anchor: str = "2026-01-05"   # first day of sprint `stats_sprint_anchor_number`
+    stats_sprint_anchor_number: int = 1
+    stats_sprint_length_days: int = 14
+    stats_judgment: tuple[tuple[str, tuple[str, ...]], ...] = STATS_DEFAULT_JUDGMENT
+    stats_roi: tuple[tuple[str, float], ...] = ()   # `[stats.roi]` numbers, defaults filled
+    stats_roi_currency: str = ""           # `[stats.roi] currency` ("" = no table)
+    stats_control_group: bool = True       # `reviewme enrich` also records unreviewed PRs
+    stats_bot_since: str = ""              # YYYY-MM-DD the bot started ("" = first live run)
+    # `[[stats.eras]]` as (name, YYYY-MM-DD, label, bot_login), sorted by date; () = none.
+    stats_eras: tuple[tuple[str, str, str, str], ...] = ()
+    stats_debrief: bool = True             # the summary's generated "Debrief" card
+    stats_triage_enabled: bool = True      # `[stats.triage] enabled`
+    stats_triage_model: str = ""           # "" = CLAUDE_MODEL, else the CLI default
+    stats_triage_max_budget_usd: float = STATS_TRIAGE_DEFAULT_BUDGET   # per `triage` pass
 
     def reviewer(self, reviewer_id: str) -> ReviewerSpec | None:
         return next((r for r in self.reviewers if r.id == reviewer_id), None)
@@ -140,6 +193,11 @@ def load_review_method() -> str:
 def load_verify_method() -> str:
     """The verification pass guidelines (core)."""
     return _VERIFY_FILE.read_text(encoding="utf-8") if _VERIFY_FILE.exists() else ""
+
+
+def load_triage_method() -> str:
+    """The triage pass guidelines (core): taxonomy and JSON schema the parser expects."""
+    return _TRIAGE_FILE.read_text(encoding="utf-8") if _TRIAGE_FILE.exists() else ""
 
 
 def _read_toml(path: Path) -> dict:
@@ -285,8 +343,7 @@ def _adapt_core(spec: ReviewerSpec, overrides: dict, project_name: str) -> Revie
     return dataclasses.replace(spec, **changes) if changes else spec
 
 
-def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
-    """Loads `<projects>/<name>/`. Raises ProjectConfigError if the config is invalid."""
+def _project_dir(name: str, base_dir: Path | None) -> Path:
     root = base_dir or projects_dir()
     pdir = root / name
     if not pdir.is_dir():
@@ -295,10 +352,44 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
         raise ProjectConfigError(
             f"project '{name}' not found in {root}"
             + (f" (available: {', '.join(available)})" if available else ""))
+    return pdir
+
+
+def _project_settings(name: str, settings: dict) -> dict:
+    """The project-wide fields of `ProjectConfig` (language, ledger, `[stats]`): what
+    does not depend on any reviewer, so `load_project_settings` can read them alone."""
+    try:
+        language = normalize_language(
+            (settings.get("review", {}) or {}).get("language")
+            or os.environ.get("REVIEWME_LANGUAGE"))
+    except ValueError as e:
+        raise ProjectConfigError(f"project '{name}': `[review] language`: {e}") from e
+    ledger = settings.get("ledger", {}) or {}
+    return {"language": language,
+            "ledger_include_text": bool(ledger.get("include_text", False)),
+            **_load_stats(settings.get("stats"), name)}
+
+
+def load_project_settings(name: str, base_dir: Path | None = None) -> ProjectConfig:
+    """`<projects>/<name>/project.toml` WITHOUT its reviewers: `reviewers` is empty.
+
+    For the dashboard only. A folder that only holds the stats of a repository (its
+    `[stats]` and `bot_since`, no reviewer yet, or a reviewer folder broken by a typo)
+    is not a project a review can run with, and `load_project` keeps refusing it; but its
+    `[stats]` are still the right settings for the page, and silently dropping them for
+    the defaults shows wrong eras and a wrong start date. `[stats]` stays strict here.
+    """
+    pdir = _project_dir(name, base_dir)
+    settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
+    return ProjectConfig(name=name, directory=pdir, **_project_settings(name, settings))
+
+
+def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
+    """Loads `<projects>/<name>/`. Raises ProjectConfigError if the config is invalid."""
+    pdir = _project_dir(name, base_dir)
 
     # PROJECT settings (not a reviewer's), optional.
     settings = _read_toml(pdir / "project.toml") if (pdir / "project.toml").is_file() else {}
-    ledger = settings.get("ledger", {}) or {}
 
     # Two sources of reviewers:
     # - the FOLDERS of `reviewers/`: the project's own reviewers. No list to keep up to date
@@ -344,18 +435,225 @@ def load_project(name: str, base_dir: Path | None = None) -> ProjectConfig:
         raise ProjectConfigError(
             f"project '{name}': every reviewer is disabled (`enabled = false`)")
 
-    try:
-        language = normalize_language(
-            (settings.get("review", {}) or {}).get("language")
-            or os.environ.get("REVIEWME_LANGUAGE"))
-    except ValueError as e:
-        raise ProjectConfigError(f"project '{name}': `[review] language`: {e}") from e
+    fields = _project_settings(name, settings)
     import dataclasses
-    active = tuple(dataclasses.replace(s, language=language) for s in active)
+    active = tuple(dataclasses.replace(s, language=fields["language"]) for s in active)
 
-    return ProjectConfig(name=name, directory=pdir, reviewers=active,
-                         ledger_include_text=bool(ledger.get("include_text", False)),
-                         language=language)
+    return ProjectConfig(name=name, directory=pdir, reviewers=active, **fields)
+
+
+def _load_roi(roi, where: str) -> dict:
+    """`[stats.roi]` -> (numbers with defaults filled, currency). Strict: an estimate
+    built on a typo (`minutes_per_findings`) would print a wrong number with confidence."""
+    if not isinstance(roi, dict):
+        raise ProjectConfigError(f"{where} must be a table")
+    known = {*STATS_ROI_NUMERIC, "currency"}
+    unknown = sorted(set(roi) - known)
+    if unknown:
+        raise ProjectConfigError(f"{where}: unknown key(s) {unknown} "
+                                 f"(possible: {', '.join(sorted(known))})")
+    bad = sorted(k for k in STATS_ROI_NUMERIC if k in roi
+                 and (isinstance(roi[k], bool) or not isinstance(roi[k], int | float)
+                      or roi[k] <= 0))
+    if bad:
+        raise ProjectConfigError(f"{where}: {bad} must be numbers > 0")
+    if "hourly_cost" not in roi:
+        raise ProjectConfigError(f"{where}: `hourly_cost` is required (the cost of one "
+                                 f"hour of a developer, in `currency`)")
+    currency = roi.get("currency", STATS_ROI_DEFAULT_CURRENCY)
+    if not isinstance(currency, str) or not currency.strip() or len(currency.strip()) > 8:
+        raise ProjectConfigError(f"{where} `currency` must be a short text (EUR, USD…)")
+    values = {**dict(STATS_ROI_DEFAULTS),
+              **{k: float(roi[k]) for k in STATS_ROI_NUMERIC if k in roi}}
+    return {"stats_roi": tuple(sorted(values.items())),
+            "stats_roi_currency": currency.strip()}
+
+
+def _load_triage(table, where: str) -> dict:
+    """`[stats.triage]` -> `ProjectConfig` fields. Strict like the rest of `[stats]`: a
+    `max_budget = 5` typo would otherwise run with the default and nobody would know."""
+    if not isinstance(table, dict):
+        raise ProjectConfigError(f"{where} must be a table")
+    unknown = sorted(set(table) - STATS_TRIAGE_KEYS)
+    if unknown:
+        raise ProjectConfigError(f"{where}: unknown key(s) {unknown} "
+                                 f"(possible: {', '.join(sorted(STATS_TRIAGE_KEYS))})")
+    out: dict = {}
+    if "enabled" in table:
+        if not isinstance(table["enabled"], bool):
+            raise ProjectConfigError(f"{where} `enabled` must be true or false")
+        out["stats_triage_enabled"] = table["enabled"]
+    if "model" in table:
+        model = table["model"]
+        # Passed as one argv item to the CLI: no shell, but a newline or a space has no
+        # business in a model id and would only produce a confusing CLI error later.
+        if not isinstance(model, str) or any(c.isspace() for c in model.strip()) \
+                or len(model.strip()) > 100:
+            raise ProjectConfigError(f"{where} `model` must be a model id (no spaces)")
+        out["stats_triage_model"] = model.strip()
+    if "max_budget_usd" in table:
+        budget = table["max_budget_usd"]
+        if isinstance(budget, bool) or not isinstance(budget, int | float) or budget <= 0:
+            raise ProjectConfigError(f"{where} `max_budget_usd` must be a number > 0")
+        out["stats_triage_max_budget_usd"] = float(budget)
+    return out
+
+
+def _load_eras(eras, where: str) -> dict:
+    """`[[stats.eras]]` -> `stats_eras`, sorted by `since`.
+
+    Eras are consecutive: each one runs until the next one's `since`, so the order they
+    are written in does not matter (sorted here), but two eras starting the same day
+    would leave one of them empty without a word: refused. A `label` names the GitHub
+    label that marked the bot-reviewed PRs of that era (a prototype bot, before
+    ReviewMe's own label): a typo there only empties a table row, a typo in `since`
+    moves every PR, hence the strict date. `bot_login` is the account that era's bot
+    posted under when it was a person's (a prototype run with the maintainer's token):
+    the dashboard takes that login's reviews and threads out of the human counts of the
+    era's labelled PRs, so it needs the `label` (on an unlabelled PR, the same login is
+    the person reviewing).
+    """
+    from datetime import date
+    if not isinstance(eras, list) or not all(isinstance(e, dict) for e in eras):
+        raise ProjectConfigError(f"{where} must be an array of tables ([[stats.eras]])")
+    out: list[tuple[str, str, str, str]] = []
+    for i, era in enumerate(eras, 1):
+        unknown = sorted(set(era) - STATS_ERA_KEYS)
+        if unknown:
+            raise ProjectConfigError(f"{where} #{i}: unknown key(s) {unknown} "
+                                     f"(possible: {', '.join(sorted(STATS_ERA_KEYS))})")
+        name = era.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60:
+            raise ProjectConfigError(f"{where} #{i}: `name` must be a short text")
+        if "since" not in era:
+            raise ProjectConfigError(f"{where} '{name.strip()}': `since` is required "
+                                     f"(YYYY-MM-DD)")
+        try:
+            since = date.fromisoformat(str(era["since"])).isoformat()
+        except ValueError as e:
+            raise ProjectConfigError(f"{where} '{name.strip()}': `since`: expected "
+                                     f"YYYY-MM-DD") from e
+        label = era.get("label", "")
+        if not isinstance(label, str) or len(label.strip()) > 100:
+            raise ProjectConfigError(f"{where} '{name.strip()}': `label` must be a "
+                                     f"GitHub label name")
+        bot_login = era.get("bot_login", "")
+        if not isinstance(bot_login, str) or any(c.isspace() for c in bot_login.strip()) \
+                or len(bot_login.strip()) > 100:
+            raise ProjectConfigError(f"{where} '{name.strip()}': `bot_login` must be a "
+                                     f"GitHub login")
+        if bot_login.strip() and not label.strip():
+            raise ProjectConfigError(f"{where} '{name.strip()}': `bot_login` needs a "
+                                     f"`label` (only labelled PRs are corrected)")
+        out.append((name.strip(), since, label.strip(), bot_login.strip()))
+    out.sort(key=lambda e: e[1])
+    days = [e[1] for e in out]
+    doubles = sorted({d for d in days if days.count(d) > 1})
+    if doubles:
+        raise ProjectConfigError(f"{where}: two eras start on {', '.join(doubles)} "
+                                 f"(each era needs its own `since`)")
+    names = [e[0] for e in out]
+    if len(set(names)) != len(names):
+        raise ProjectConfigError(f"{where}: era names must be unique")
+    return {"stats_eras": tuple(out)}
+
+
+def _load_stats(table, project_name: str) -> dict:
+    """`[stats]` of project.toml -> `ProjectConfig` fields. Absent = the defaults.
+
+    Strict on purpose: a typo in a section id (`hall-of-fame`) or a key (`windows`) would
+    otherwise silently hide a page, and nobody notices a page that is not there.
+    """
+    if table is None:
+        return {}
+    where = f"project '{project_name}': `[stats]`"
+    if not isinstance(table, dict):
+        raise ProjectConfigError(f"{where} must be a table")
+    unknown = sorted(set(table) - _STATS_KEYS)
+    if unknown:
+        raise ProjectConfigError(f"{where}: unknown key(s) {unknown} "
+                                 f"(possible: {', '.join(sorted(_STATS_KEYS))})")
+    out: dict = {}
+    if "sections" in table:
+        sections = table["sections"]
+        if not isinstance(sections, list) or not all(isinstance(x, str) for x in sections):
+            raise ProjectConfigError(f"{where} `sections` must be a list of section ids")
+        bad = [x for x in sections if x not in STATS_SECTIONS]
+        if bad:
+            raise ProjectConfigError(f"{where}: unknown section(s) {bad} "
+                                     f"(known: {', '.join(STATS_SECTIONS)})")
+        out["stats_sections"] = tuple(dict.fromkeys(sections))     # order kept, no doubles
+    for key, allowed in (("names", STATS_NAMES), ("period", STATS_PERIODS)):
+        if key in table:
+            value = str(table[key]).strip().lower()
+            if value not in allowed:
+                raise ProjectConfigError(f"{where} `{key}`: {table[key]!r} "
+                                         f"(expected: {', '.join(allowed)})")
+            out[f"stats_{key}"] = value
+    if "window" in table:
+        from .enrich import parse_since  # lazy: enrich pulls the GitHub layer
+        try:
+            parse_since(str(table["window"]))
+        except ValueError as e:
+            raise ProjectConfigError(f"{where} `window`: {e}") from e
+        out["stats_window"] = str(table["window"]).strip()
+    if "sprint_anchor" in table:
+        from datetime import date
+        try:
+            out["stats_sprint_anchor"] = date.fromisoformat(
+                str(table["sprint_anchor"])).isoformat()
+        except ValueError as e:
+            raise ProjectConfigError(f"{where} `sprint_anchor`: expected YYYY-MM-DD") from e
+    if "bot_since" in table:
+        from datetime import date
+        try:
+            out["stats_bot_since"] = date.fromisoformat(str(table["bot_since"])).isoformat()
+        except ValueError as e:
+            raise ProjectConfigError(f"{where} `bot_since`: expected YYYY-MM-DD") from e
+    if "sprint_anchor_number" in table:
+        try:
+            out["stats_sprint_anchor_number"] = int(table["sprint_anchor_number"])
+        except (TypeError, ValueError) as e:
+            raise ProjectConfigError(f"{where} `sprint_anchor_number` must be an "
+                                     f"integer") from e
+    if "sprint_length_days" in table:
+        try:
+            length = int(table["sprint_length_days"])
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0:
+            raise ProjectConfigError(f"{where} `sprint_length_days` must be an integer > 0")
+        out["stats_sprint_length_days"] = length
+    if "judgment" in table:
+        judgment = table["judgment"]
+        known = dict(STATS_DEFAULT_JUDGMENT)
+        if not isinstance(judgment, dict):
+            raise ProjectConfigError(f"{where} `judgment` must be a table")
+        bad = sorted(set(judgment) - set(known))
+        if bad:
+            raise ProjectConfigError(f"{where} `judgment`: unknown judgment(s) {bad} "
+                                     f"(possible: {', '.join(known)})")
+        for k, v in judgment.items():
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                raise ProjectConfigError(f"{where} `judgment.{k}` must be a list of "
+                                         f"reaction contents")
+            known[k] = tuple(v)
+        out["stats_judgment"] = tuple(known.items())
+    if "debrief" in table:
+        if not isinstance(table["debrief"], bool):
+            raise ProjectConfigError(f"{where} `debrief` must be true or false")
+        out["stats_debrief"] = table["debrief"]
+    if "control_group" in table:
+        if not isinstance(table["control_group"], bool):
+            raise ProjectConfigError(f"{where} `control_group` must be true or false")
+        out["stats_control_group"] = table["control_group"]
+    if "roi" in table:
+        out.update(_load_roi(table["roi"], f"{where} `roi`"))
+    if "triage" in table:
+        out.update(_load_triage(table["triage"], f"{where} `triage`"))
+    if "eras" in table:
+        out.update(_load_eras(table["eras"], f"{where} `eras`"))
+    return out
 
 
 def _simple_project(config: Config) -> ProjectConfig:

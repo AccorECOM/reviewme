@@ -47,3 +47,30 @@ def test_pat_mode_sends_pat(monkeypatch):
     gh, seen = _client(monkeypatch, config, "PAT")
     gh.get_pr_diff(1)
     assert seen[0][1] == "Bearer PAT"
+
+
+def test_prs_updated_since_stops_at_the_window(monkeypatch):
+    """Sorted by `updated` desc: the page that reaches past the window is the last read."""
+    pages = {"1": [{"number": n, "updated_at": "2026-10-28T00:00:00Z"} for n in range(100)],
+             "2": [{"number": 100, "updated_at": "2026-10-20T00:00:00Z"},
+                   {"number": 101, "updated_at": "2026-09-01T00:00:00Z"}],
+             "3": [{"number": 102, "updated_at": "2026-10-25T00:00:00Z"}]}
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(dict(request.url.params))
+        return httpx.Response(200, json=pages.get(request.url.params["page"], []))
+
+    config = Config(github_token="PAT", github_repo="o/r", confidence_threshold=50, dry_run=True)
+    monkeypatch.setattr("reviewme.github_auth.build_provider", lambda cfg: TokenProvider("PAT"))
+    gh = GitHubClient(config)
+    gh._client = httpx.Client(transport=httpx.MockTransport(handler))
+    prs = gh.list_prs_updated_since("2026-10-15T00:00:00+00:00")
+    assert [p["number"] for p in prs] == list(range(101))
+    assert len(calls) == 2 and calls[0]["state"] == "all" and calls[0]["sort"] == "updated"
+    assert calls[0]["direction"] == "desc"
+    # A short page is the last one, even when all of it is in the window.
+    pages = {"1": [{"number": 1, "updated_at": "2026-10-28T00:00:00Z"}]}
+    calls.clear()
+    assert len(gh.list_prs_updated_since("2026-10-15T00:00:00+00:00")) == 1
+    assert len(calls) == 1

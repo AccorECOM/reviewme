@@ -388,6 +388,9 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         counts.update(engagement)
 
         findings_total = sum(len(r.findings) for _, r in outcomes)
+        # Reviewers run side by side: the run lasts as long as the slowest one.
+        duration_ms = max((r.metadata.get("duration_ms", 0) or 0 for _, r in outcomes),
+                          default=0)
         save_review(pr_number, {
             "pr_number": pr_number, "pr_title": title, "pr_author": author,
             "head_sha": head_sha, "diff_size_kb": round(diff_size_kb, 1),
@@ -398,7 +401,7 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
             "counts": counts,
             "summary": scrub_text("\n\n".join(r.summary for _, r in outcomes if r.summary)),
             "cost_usd": total_cost,
-            "duration_ms": max((r.metadata.get("duration_ms", 0) for _, r in outcomes), default=0),
+            "duration_ms": duration_ms,
             "input_tokens": sum(r.metadata.get("input_tokens", 0) for _, r in outcomes),
             "output_tokens": sum(r.metadata.get("output_tokens", 0) for _, r in outcomes),
         })
@@ -420,7 +423,7 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         else:
             enregistrer_stats(pr_number, head_sha, author, project.name,
                               [s.id for s, _ in outcomes], counts, total_cost,
-                              counts.get("duration_ms", 0) or 0, diff_size_kb, logger)
+                              duration_ms, diff_size_kb, logger)
 
         if not config.dry_run:
             mark_reviewed(pr_number, head_sha, title, status="success",

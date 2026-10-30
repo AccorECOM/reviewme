@@ -17,6 +17,11 @@ The text of the remarks, replies and human comments is only present if the proje
 enabled `[ledger] include_text = true` (in `project.toml`) or
 `REVIEWME_LEDGER_INCLUDE_TEXT=1`. Without it, the archive contains no PR content.
 
+The dashboard (`reviewme stats --html`, `dashboard.html` in the archive) is computed from
+these same files, plus `history.jsonl` and `history-bugs.jsonl` when `reviewme history`
+wrote them; it reads none of the text fields, except the recurring-miss texts of
+`triage.jsonl` when `include_text` is on (see below).
+
 ## `findings.jsonl` — one line per finding and per run, posted or not
 
 | Field | Meaning |
@@ -27,6 +32,7 @@ enabled `[ledger] include_text = true` (in `project.toml`) or
 | `variant` | `live` (evaluated pipeline) or `baseline` (control, always in `dry_run`) |
 | `dry_run` | `true`: nothing was posted; `fate = posted` means "would have been posted" |
 | `status` | `ok`, or `post_failed` if the GitHub write failed |
+| `trigger` | What started the run: `REVIEWME_TRIGGER` of the deployment, a free string. Documented values: `pr_build` (CI on a PR event), `manual`, `schedule`, `watch` (set by `reviewme watch` unless the deployment set its own). `unknown` when not set; absent on rows written before 1.4.0 (read as `unknown`) |
 | `reviewer` | Reviewer (`tech`, `architect`…) |
 | `model` | Model that **actually** answered (read from the CLI envelope) |
 | `engine_commit` | Engine commit |
@@ -46,8 +52,8 @@ enabled `[ledger] include_text = true` (in `project.toml`) or
 
 ## `runs.jsonl` — one line per reviewer and per run
 
-`run_id`, `ts`, `repo`, `pr`, `head_sha`, `base_sha`, `variant`, `dry_run`, `reviewer`,
-`model`, `engine_commit`, `config_hash`, plus:
+`run_id`, `ts`, `repo`, `pr`, `head_sha`, `base_sha`, `variant`, `dry_run`, `status`,
+`trigger`, `reviewer`, `model`, `engine_commit`, `config_hash`, plus:
 
 | Field | Meaning |
 |---|---|
@@ -71,21 +77,128 @@ enabled `[ledger] include_text = true` (in `project.toml`) or
 | `head_sha` | PR head at enrichment time |
 | `fingerprint_gone_at` | First head commit observed where the commented line no longer exists in the file, while the file still exists: **acted upon** |
 | `file_gone_at` | The file no longer exists at this commit (deleted or renamed): proves nothing, not counted as acted upon |
-| `reactions` | `[{content: "+1"\|"-1", user, role: "pr_author"\|"other"}]` |
+| `reactions` | `[{content, user, role: "pr_author"\|"other", ts}]`. `content` is any GitHub reaction: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` (lines written before 1.4.0 only hold `+1` / `-1`, without `ts`). What each one means is the dashboard's `[stats.judgment]`, not the collector's. Reactions from other bots and from `BOT_LOGIN` are ignored |
+| `first_signal_at` | Earliest human signal on the remark: first reaction or reply (GitHub `created_at`). Kept across passes, so a reaction removed later still counts. The dashboard derives the judgment delay from it (signal minus the `ts` of the run that posted the remark) |
 | `replies` | `[{user, role, ts, label, contests, remember?, text?}]`. `label` (keyword-based, to be reviewed): `fixed`, `false_positive`, `intended`, `unimportant`, `question`, `other`. `contests` = `false_positive` or `intended`. `remember`: `{trusted, rule?}` for a `@reviewme remember …` reply, `trusted` if the author has write access, `rule` only with `include_text`. Reactions from other bots and from `BOT_LOGIN` are ignored |
 | `thread_resolved`, `resolved_by` | Thread resolved on GitHub, and by whom |
 | `human_comments_nearby` | Human comments 10 lines away or less, same file |
 
 ## `prs.jsonl` — state of a PR (`reviewme enrich`)
 
+One line per PR the bot reviewed (`reviewed = true`, a live run outside dry-run, with or
+without findings) and, with the control group on (`[stats] control_group`, default
+`true`; `REVIEWME_CONTROL_GROUP` overrides it), one line per PR updated in the window that
+has **no run at all** in the ledger (`reviewed = false`). PRs seen only in dry-run or by
+the baseline are in neither group; PRs opened by a bot account (dependency updates…) are
+left out of the control group.
+
 | Field | Meaning |
 |---|---|
-| `state`, `merged_at`, `author`, `head_sha` | State of the PR |
-| `commits_after_first_review` | Commits pushed after the first run in the ledger |
+| `reviewed` | `true`: the bot reviewed it; `false`: control group. Absent on lines written before 1.4.0 (they are all reviewed PRs) |
+| `control_group` | The enrichment pass that wrote the line also recorded the unreviewed PRs: only then can a coverage ratio be read from the file |
+| `state`, `merged_at`, `author`, `head_sha` | State of the PR (`state` = `open`, `closed` or `merged`) |
+| `created_at` | PR opened (GitHub) |
+| `first_human_review_at`, `human_reviews` | Earliest submitted review, and number of submitted reviews, by a person other than the PR author and the bot (the bot is recognized by `BOT_LOGIN`, or by its review carrying a bot comment; other bots excluded). Replies typed in a review thread are `COMMENTED` reviews and count |
+| `first_bot_run_at` | `ts` of the PR's first live run in the whole ledger (`null` in the control group) |
+| `additions`, `deletions`, `changed_files` | Size of the PR. `null` in the control group: the list endpoint does not carry them, and one more call per PR was not worth it |
+| `commits_after_first_review` | Commits pushed after the first run in the ledger (reviewed PRs only) |
 | `human_comments`, `human_replies` | Human review comments (roots) and replies; other bots (Copilot, Sonar…) are excluded |
 | `human_comments_on_silent_lines` | … on lines where the bot had nothing, not even dropped: **approximate misses** |
 | `human_comments_on_dropped_findings` | … where the bot had a dropped finding (`dropped_low`, `dropped_unverified`) and nothing posted: **recall cost of the filter** |
-| `human_comments_text` | Details, only with `include_text` |
+| `human_comments_text` | Details, only with `include_text` (reviewed PRs only) |
+
+The `human_comments_on_*` fields are only written for reviewed PRs; approximate misses
+(`quality.json` `misses`) are computed on reviewed PRs only.
+
+## `history.jsonl` — the team's PRs over years (`reviewme history`)
+
+One line per merged or closed PR created since `--since`, written by a one-off scan
+(re-runnable: the most recent line per (`repo`, `pr`) wins). It is not windowed and not
+part of the `export` archive: the dashboard's `history` and `roi` pages read it from the
+ledger folder. No title, no body, no comment text; review bodies are read during the scan
+only to recognise the bot's own reviews.
+
+| Field | Meaning |
+|---|---|
+| `ts` | Time of the scan |
+| `repo`, `pr` | Repository and PR number |
+| `author`, `author_is_bot` | PR author (`?` for a deleted account); `true` for a bot account (GitHub App, `[bot]` login). The dashboard leaves bot PRs and drafts out |
+| `created_at`, `merged_at`, `closed_at` | GitHub dates |
+| `state` | `merged` or `closed` (closed without merge) |
+| `is_draft`, `base_ref`, `head_ref` | Draft flag and branch names |
+| `additions`, `deletions`, `changed_files`, `commits` | Size of the PR |
+| `human_reviews`, `first_human_review_at` | Submitted reviews (up to 100 per PR) by someone other than the author, `BOT_LOGIN` and bots, and whose body does not carry the bot's marker or signature; earliest one. With a PAT and no `BOT_LOGIN`, the bot's replies in threads (empty `COMMENTED` reviews under the PAT owner's name) may count |
+| `review_threads` | All review threads, the bot's included |
+| `bot_threads`, `human_threads` | Threads the bot opened (its posted inline findings in the ledger, live, outside dry-run) and the difference |
+| `review_authors` | `{login: count}` of submitted reviews (not pending), every author except the PR's own and `[bot]` / GitHub App accounts. The bot's marker, signature and `BOT_LOGIN` are NOT filtered here: the counts exist to recognise, later, a bot of an earlier era that posted under a person's account (`[[stats.eras]] bot_login`). Logins only, as elsewhere in the ledger; absent on rows scanned before 1.4.0 |
+| `thread_authors` | `{login: count}` of review threads (the first 100) by the login of their first comment (`?` for a deleted account). Same purpose and same caveat as `review_authors` |
+| `review_first_at` | `{login: earliest submittedAt}` of the same reviews as `review_authors`: lets the dashboard recompute `first_human_review_at` without an earlier era's `bot_login` |
+| `issue_comments` | Conversation comments, every author (bots included) |
+| `labels` | Label names |
+| `is_revert` | Head branch contains `revert` (GitHub's revert button names it `revert-<n>-…`) |
+| `is_hotfix_branch` | Head branch contains `hotfix` (any case): an emergency fix. Weak proxy: titles are not stored, and naming habits vary. Rows written before 1.4.0's split also set it for `fix/` branches; the dashboard recomputes both flags from `head_ref` |
+| `is_fix_branch` | Head branch is an ordinary fix: contains `fix/` (so `bugfix/` too) or starts with the word `fix` (`fix-123`, `fix_login`; not `fixture/`), and is not a hotfix branch. Counted apart from hotfixes: where `fix/` is the normal prefix for any bug fix, mixing both made a third of the PRs "hotfixes" |
+| `bot_reviewed` | A live run outside dry-run exists for the PR in `runs.jsonl` (same repo), or the PR carries `REVIEW_LABEL`. The dashboard also counts a live run recorded after the scan |
+| `jira_key`, `jira_issue_type`, `jira_created_at`, `is_bug_ticket` | Only with `--jira`: key read from the head branch (`JIRA_KEY_PREFIX` filter), the ticket's type and creation date, and `true` when the type is `Bug`, `Bogue`, `Defect` or a name in `JIRA_BUG_TYPES` (`null` when the ticket was not found) |
+
+## `history-bugs.jsonl` — bug tickets created per month (`reviewme history --jira`)
+
+| Field | Meaning |
+|---|---|
+| `ts` | Time of the scan |
+| `projects` | Jira projects counted: `JIRA_KEY_PREFIX`, else every project whose keys appear in the scanned branches (comma-separated) |
+| `month` | `YYYY-MM`; every month from `--since` to the scan, zeros included |
+| `bugs` | Tickets of a type in `JIRA_BUG_TYPES` (default `Bug`) created that month |
+
+The most recent line per (`projects`, `month`) wins; the dashboard sums the project sets.
+
+The **bot start** used by both pages is `[stats] bot_since` when set, else the `ts` of
+the first live run outside dry-run in the whole `runs.jsonl`: one implicit era named
+"ReviewMe". With `[[stats.eras]]` (`name`, `since`, optional `label`), each PR belongs
+to the era whose `since` is the latest on or before its `created_at` ("before" when
+earlier than the first one); `bot_reviewed` and `REVIEW_LABEL` are then not read: a PR
+is reviewed when a live run exists for it, or its era has a `label` that is among the
+PR's `labels`. When the era also has a `bot_login`, that login's entries of
+`review_authors` and `thread_authors` are subtracted from `human_reviews` and
+`human_threads` (floor 0) on the era's labelled PRs, which count as reviewed; on rows
+without those fields the stored totals are kept and the history page says a rescan is
+needed. `first_human_review_at` becomes the earliest `review_first_at` of another login
+(`null` when that login was the only reviewer). The ROI page compares "before" with
+the last era.
+
+## `triage.jsonl` — LLM classification of the feedback (`reviewme triage`)
+
+Optional, written by `reviewme triage --since 14d` and only when the ledger has text
+(`include_text`): a model reads the reply texts of contested findings and the human
+comments on reviewed PRs, with no tool, and nothing else. One part per pass
+(`triage/<timestamp>-<run_id>.jsonl`). In the archive, `reason` and the pattern texts are
+removed unless `include_text` is on.
+
+Rows with `kind = "finding"`, one per classified finding (the most recent per
+`comment_id` wins):
+
+| Field | Meaning |
+|---|---|
+| `ts`, `run_id` | Time and id of the triage pass |
+| `repo`, `pr`, `comment_id`, `reviewer`, `rule_id` | The posted finding, from `findings.jsonl` |
+| `cause` | One of `false_positive` (factually wrong), `missing_context` (true in isolation, but intended or a team convention), `preexisting` (not introduced by the PR), `duplicate` (already reported by a human or a tool), `unimportant` (true, not worth a comment), `fixed` (accepted and fixed), `question` (asked, no verdict), `other` |
+| `confidence` | 0-100, the model's confidence in the cause from the texts alone (`null` when unreadable) |
+| `reason` | One sentence in the project language (`[review] language`): text about the PR |
+| `model` | Model(s) that answered (`simulated` with `REVIEWME_FAKE`) |
+
+Input: every inline finding posted (live, outside dry-run) on a PR reviewed in the window
+that has a human reply or a "wrong" reaction (`[stats.judgment] wrong`, 👎 by default),
+with its reply texts (600 characters each, 8 replies at most), its message when the
+ledger has it, its keyword labels and its 👎 count; no login.
+
+One row with `kind = "patterns"` per pass:
+
+| Field | Meaning |
+|---|---|
+| `ts`, `run_id`, `repo` | The pass (`repo` = the `--repo` filter, else `null`) |
+| `patterns` | At most 8 `{title, count, example_comment_ids, suggested_rule}`: recurring themes among the human root comments of reviewed PRs that were not next to a spoken finding (`near_bot = false` in `prs.jsonl`, at most 150 comments, shortened to fit) |
+| `misses`, `threads` | Comments and findings sent |
+| `calls`, `cost_usd`, `model` | CLI calls (batches of ~60,000 characters), total cost of the pass, model |
 
 ## `quality.json` — computed quality block
 
@@ -107,4 +220,7 @@ PRs and commits: remarks each pipeline would have posted, and those shared by fi
 
 `manifest.json` (fingerprint of each settings file) and a copy of the `*.toml` files. The
 prompts (`*.md`) are not copied: their fingerprint says they changed, the configuration
-repository says how.
+repository says how. The dashboard's "file" column for contested rules does not read the
+snapshot: it searches the CURRENT project folder (`common/`, `guidelines/`,
+`reviewers/*/`) for the rule id as a whole word, since rule ids come from the model's
+output after the snapshot was taken.

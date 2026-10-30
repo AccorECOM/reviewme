@@ -51,6 +51,8 @@ jobs:
           # For a separate instance: clone that repository and point to it.
           REVIEWME_CONFIG_HOME: ${{ github.workspace }}/.reviewme
           PROJECT: my-repo
+          # Recorded in the ledger: separates PR builds from manual and scheduled runs.
+          REVIEWME_TRIGGER: pr_build
 
           CONFIDENCE_THRESHOLD: "80"
           MAX_COMMENTS_PER_PR: "10"

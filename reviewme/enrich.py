@@ -6,15 +6,26 @@ This module rereads the PRs in the window and records, for each bot comment:
 - **effect tracking**: has the commented line disappeared from the file at the PR head?
   We compare fingerprints (`fingerprint_hash`), never text: it works without the ledger
   having kept the line's content;
-- 👍 / 👎 **reactions**, per author, distinguishing the PR author from others;
+- **reactions** (every GitHub content: 👍 👎 😄 😕 ❤️ 🎉 🚀 👀), per author, distinguishing
+  the PR author from others. Which ones mean "right" or "wrong" is the dashboard's call
+  (`[stats.judgment]`), not the collector's: a 🚀 dropped here could never be counted later;
 - human **replies**, labeled by keywords (fixed, false positive, intended…);
+- the **first human signal** (`first_signal_at`): earliest reaction or reply, so the
+  dashboard can say how long a finding waits before anyone reacts;
 - **thread resolved** or not, and by whom;
 - **nearby human comments** (≤ 10 lines, same file): a human commenting next to the bot
   says something about what the bot saw, or missed.
 
 And, per PR (`prs.jsonl`): state, commits after the first review, human comments —
 including those on lines where the bot said nothing (approximate misses) and those on
-lines where it had a DROPPED finding (what the filter costs in recall).
+lines where it had a DROPPED finding (what the filter costs in recall) — and the PR's
+**cycle**: opened, first human review, first bot run, merged, size.
+
+**Control group** (`[stats] control_group`, on by default): the repository's PRs updated
+in the window that the bot NEVER reviewed get a `prs.jsonl` line too (`reviewed = false`),
+with the same cycle fields. Without them, "reviewed PRs merge in 2 days" has nothing to be
+compared to, and coverage (reviewed / merged) cannot be computed. Two calls per such PR
+(reviews, review comments): their size is left out, it would cost a third.
 
 DETERMINISTIC collection, no LLM. Idempotent: each pass adds one line per comment; for
 the same `comment_id`, the most recent one wins.
@@ -30,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .diff_utils import normalize_line
-from .ledger import FINDINGS_FILE, SCHEMA_VERSION, read_all, write_part
+from .ledger import FINDINGS_FILE, RUNS_FILE, SCHEMA_VERSION, read_all, write_part
 from .reconciler import _MARKER_RE, fingerprint_hash, marker_key
 from .strings import ALL_SIGNATURES
 
@@ -38,6 +49,16 @@ ENRICH_FILE = "enrich.jsonl"
 PRS_FILE = "prs.jsonl"
 NEARBY_LINES = 10
 MAX_TEXT = 1000
+
+
+def control_group(project) -> bool:
+    """List the PRs the bot never reviewed? `REVIEWME_CONTROL_GROUP` takes precedence over
+    `[stats] control_group` in `project.toml` (default yes), like `include_text`."""
+    import os
+    env = os.environ.get("REVIEWME_CONTROL_GROUP")
+    if env is not None:
+        return env.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(getattr(project, "stats_control_group", True))
 
 #: Order = priority: a reply "no it's intended, fixed anyway" is `intended`.
 #: Contest patterns themselves contain a negation ("n'est pas le cas", "not the case"):
@@ -110,6 +131,24 @@ def _clean(text: str) -> str:
     return _MARKER_RE.sub("", text or "").strip()[:MAX_TEXT]
 
 
+def _parse(ts: str | None) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(ts or "")
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def earliest(*stamps: str | None) -> str | None:
+    """Earliest of ISO timestamps, compared as dates and returned as written.
+
+    GitHub writes `…Z`, the ledger `…+00:00`: a string `min` would mostly work and then
+    silently fail on the first mixed pair.
+    """
+    known = [(dt, s) for s in stamps if (dt := _parse(s)) is not None]
+    return min(known)[1] if known else None
+
+
 #: The file no longer exists at this commit (deleted or renamed): distinct from "line missing".
 FILE_GONE = "file_gone"
 
@@ -153,6 +192,42 @@ class _Permissions:
         return self.cache[login]
 
 
+def _login(obj: dict) -> str:
+    return (obj.get("user") or {}).get("login", "") or ""
+
+
+def _cycle(gh, pr: dict, comments: list[dict], *, bot_login: str,
+           logger: logging.Logger) -> dict:
+    """Cycle fields shared by reviewed and unreviewed PRs (`prs.jsonl`).
+
+    `first_human_review_at` / `human_reviews`: submitted reviews by a person other than the
+    PR author. The bot is recognized by its login when dedicated, and otherwise by its
+    review carrying a bot comment (with a PAT it reviews under a human's name). The author
+    is left out because a reply typed in a review thread is itself a `COMMENTED` review:
+    the author answering the bot is not a review.
+    """
+    number, author = pr.get("number"), _login(pr)
+    bot_reviews = {c.get("pull_request_review_id") for c in comments if _is_bot(c)}
+    try:
+        reviews = [r for r in gh.list_pr_reviews(number)
+                   if r.get("submitted_at") and r.get("state") != "PENDING"
+                   and not _is_machine(r) and _login(r) not in ("", author, bot_login)
+                   and r.get("id") not in bot_reviews]
+        first = earliest(*(r.get("submitted_at") for r in reviews))
+        count: int | None = len(reviews)
+    except Exception as e:
+        logger.info("PR #%s: reviews unreadable (%s)", number, type(e).__name__)
+        first, count = None, None
+    return {"created_at": pr.get("created_at"), "first_human_review_at": first,
+            "human_reviews": count}
+
+
+def _human_split(comments: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(human comments, of which thread roots): neither the bot nor another tool."""
+    humans = [c for c in comments if not _is_bot(c) and not _is_machine(c)]
+    return humans, [c for c in humans if c.get("in_reply_to_id") is None]
+
+
 def _last_by_comment(rows: list[dict]) -> dict[int, dict]:
     out: dict[int, dict] = {}
     for r in rows:
@@ -164,12 +239,17 @@ def _last_by_comment(rows: list[dict]) -> dict[int, dict]:
 def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *,
               with_text: bool, logger: logging.Logger, now: str | None = None,
               files: _Files | None = None, perms: _Permissions | None = None,
-              first_head: str | None = None, bot_login: str = "") -> tuple[list[dict], dict]:
+              first_head: str | None = None, bot_login: str = "",
+              first_run_at: str | None = None,
+              control_group: bool = False) -> tuple[list[dict], dict]:
     """Enrich ONE PR. `rows` = its ledger rows (live variant), `previous` = the last known
     enrichment line per comment_id. Returns (lines, PR line).
 
     `first_head` = commit of the FIRST known run on the PR, even outside the window.
+    `first_run_at` = time of that run (`first_bot_run_at`); defaults to the oldest of `rows`.
     `bot_login` = the bot's identity when dedicated: its own reactions do not count.
+    `control_group` = whether this pass also recorded the unreviewed PRs: it tells the
+    dashboard whether a coverage ratio can be read from `prs.jsonl`.
     """
     now = now or datetime.now(UTC).isoformat(timespec="seconds")
     files = files or _Files(gh)
@@ -187,8 +267,7 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
                     type(e).__name__)
         threads = {}
 
-    humans = [c for c in comments if not _is_bot(c) and not _is_machine(c)]
-    human_roots = [c for c in humans if c.get("in_reply_to_id") is None]
+    humans, human_roots = _human_split(comments)
     replies_by_parent: dict[int, list[dict]] = {}
     for c in humans:
         if c.get("in_reply_to_id") is not None:
@@ -220,12 +299,17 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
         line["fingerprint_gone_at"] = gone
         line["file_gone_at"] = file_gone
 
+        # Every content is kept: the vocabulary (`[stats.judgment]`) decides what a 🚀
+        # means, and can change after the fact; a reaction not collected is lost for good.
+        # Only machines (other bots, and the bot itself when it has its own identity) are
+        # left out: their reactions say nothing about the finding.
         try:
             line["reactions"] = [
                 {"content": r.get("content"), "user": (r.get("user") or {}).get("login", ""),
-                 "role": role((r.get("user") or {}).get("login", ""))}
+                 "role": role((r.get("user") or {}).get("login", "")),
+                 "ts": r.get("created_at")}
                 for r in gh.list_comment_reactions(cid)
-                if r.get("content") in ("+1", "-1") and not _is_machine(r)
+                if r.get("content") and not _is_machine(r)
                 and (r.get("user") or {}).get("login") != bot_login]
         except Exception:
             line["reactions"] = prev.get("reactions", [])     # keep the last reading
@@ -248,6 +332,11 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
                 rep["text"] = _clean(body)
             replies.append(rep)
         line["replies"] = replies
+        # The previous reading counts too: a reaction removed since was still a signal,
+        # and its time is the one that says how fast people answer.
+        line["first_signal_at"] = earliest(
+            prev.get("first_signal_at"), *(r.get("ts") for r in line["reactions"]),
+            *(r.get("ts") for r in replies))
 
         thread = threads.get(cid)
         line["thread_resolved"] = bool(thread and thread.get("isResolved"))
@@ -293,9 +382,15 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
     spoken = ("posted", "deduped", "out_of_diff", "capped")
     dropped = ("dropped_low", "dropped_unverified")
     pr_line = {
-        "schema_version": SCHEMA_VERSION, "ts": now, "pr": pr_number,
+        "schema_version": SCHEMA_VERSION, "ts": now, "pr": pr_number, "reviewed": True,
+        "control_group": control_group,
         "state": "merged" if pr.get("merged_at") else pr.get("state"),
         "merged_at": pr.get("merged_at"), "author": author, "head_sha": head,
+        **_cycle(gh, pr, comments, bot_login=bot_login, logger=logger),
+        "first_bot_run_at": first_run_at or (
+            earliest(*(r.get("ts") for r in rows)) if rows else None),
+        "additions": pr.get("additions"), "deletions": pr.get("deletions"),
+        "changed_files": pr.get("changed_files"),
         "commits_after_first_review": after,
         "human_comments": len(human_roots),
         "human_replies": len(humans) - len(human_roots),
@@ -313,15 +408,49 @@ def enrich_pr(gh, pr_number: int, rows: list[dict], previous: dict[int, dict], *
     return out, pr_line
 
 
+def unreviewed_pr_line(gh, pr: dict, *, now: str, bot_login: str,
+                       logger: logging.Logger) -> dict:
+    """`prs.jsonl` line of a PR the bot never reviewed (control group).
+
+    Built from the LIST object (dates, author, state) plus two calls: reviews and review
+    comments. No `get_pr`, hence no size: `additions` / `deletions` stay None.
+    """
+    number = pr["number"]
+    comments = gh.list_review_comments(number)
+    humans, roots = _human_split(comments)
+    return {
+        "schema_version": SCHEMA_VERSION, "ts": now, "pr": number, "reviewed": False,
+        "control_group": True,
+        "state": "merged" if pr.get("merged_at") else pr.get("state"),
+        "merged_at": pr.get("merged_at"), "author": _login(pr),
+        "head_sha": (pr.get("head") or {}).get("sha"),
+        **_cycle(gh, pr, comments, bot_login=bot_login, logger=logger),
+        "first_bot_run_at": None,
+        "additions": None, "deletions": None, "changed_files": None,
+        "human_comments": len(roots), "human_replies": len(humans) - len(roots),
+    }
+
+
 def enrich(gh, root: Path, since: timedelta, logger: logging.Logger, *, with_text: bool,
-           only_pr: int | None = None, bot_login: str = "") -> dict:
-    """Enrich every ledger PR seen in the window. Returns counters."""
+           only_pr: int | None = None, bot_login: str = "",
+           control_group: bool = False) -> dict:
+    """Enrich every ledger PR seen in the window, then (`control_group`) record the
+    repository's PRs updated in the window that have no run at all. Returns counters."""
+    now = datetime.now(UTC).isoformat(timespec="seconds")
     limite = (datetime.now(UTC) - since).isoformat(timespec="seconds")
     all_live = [r for r in read_all(root, FINDINGS_FILE)
                 if r.get("variant", "live") == "live" and not r.get("dry_run")]
+    all_runs = read_all(root, RUNS_FILE)
+    live_runs = [r for r in all_runs
+                 if r.get("variant", "live") == "live" and not r.get("dry_run")]
+    # First head and first run per PR, over the WHOLE ledger: a PR reviewed before the
+    # window still started its cycle then. Runs count as much as findings: a run that
+    # found nothing is still a review, and the only trace of it is in `runs.jsonl`.
     first_head: dict[int, str] = {}
-    for r in sorted(all_live, key=lambda r: r.get("ts", "")):
+    first_run_at: dict[int, str] = {}
+    for r in sorted(all_live + live_runs, key=lambda r: r.get("ts", "")):
         first_head.setdefault(r["pr"], r.get("head_sha"))
+        first_run_at.setdefault(r["pr"], r.get("ts"))
     rows = [r for r in all_live if r.get("ts", "") >= limite]
     if only_pr is not None:
         rows = [r for r in rows if r.get("pr") == only_pr]
@@ -329,6 +458,11 @@ def enrich(gh, root: Path, since: timedelta, logger: logging.Logger, *, with_tex
     by_pr: dict[int, list[dict]] = {}
     for r in rows:
         by_pr.setdefault(r["pr"], []).append(r)
+    # A PR whose runs in the window found nothing still gets its `prs.jsonl` line:
+    # otherwise it would look unreviewed and skew coverage.
+    for r in live_runs:
+        if r.get("ts", "") >= limite and only_pr in (None, r.get("pr")):
+            by_pr.setdefault(r["pr"], [])
 
     files, perms = _Files(gh), _Permissions(gh)
     lines: list[dict] = []
@@ -336,9 +470,11 @@ def enrich(gh, root: Path, since: timedelta, logger: logging.Logger, *, with_tex
     for pr_number, pr_rows in sorted(by_pr.items()):
         try:
             out, pr_line = enrich_pr(gh, pr_number, pr_rows, previous, with_text=with_text,
-                                     logger=logger, files=files, perms=perms,
+                                     logger=logger, now=now, files=files, perms=perms,
                                      first_head=first_head.get(pr_number),
-                                     bot_login=bot_login)
+                                     bot_login=bot_login,
+                                     first_run_at=first_run_at.get(pr_number),
+                                     control_group=control_group and only_pr is None)
         except Exception as e:
             logger.warning("PR #%s: enrichment failed (%s: %s)", pr_number,
                            type(e).__name__, e)
@@ -346,7 +482,32 @@ def enrich(gh, root: Path, since: timedelta, logger: logging.Logger, *, with_tex
         lines.extend(out)
         prs.append(pr_line)
 
+    unreviewed = 0
+    if control_group and only_pr is None:
+        # "No run" = no run of ANY variant or mode: a PR seen only in dry-run or by the
+        # baseline is not a clean control either, so it is left out of both groups.
+        seen = {r.get("pr") for r in read_all(root, FINDINGS_FILE) + all_runs}
+        try:
+            candidates = gh.list_prs_updated_since(limite)
+        except Exception as e:
+            logger.warning("control group: PR list unreadable (%s: %s)", type(e).__name__, e)
+            candidates = []
+        for pr in candidates:
+            # PRs opened by tools (dependency updates…) are not what the bot is compared
+            # on: a human cycle against a robot one would flatter or sink it at random.
+            if pr.get("number") in seen or _is_machine(pr):
+                continue
+            try:
+                prs.append(unreviewed_pr_line(gh, pr, now=now, bot_login=bot_login,
+                                              logger=logger))
+                unreviewed += 1
+            except Exception as e:
+                logger.warning("PR #%s: control-group line failed (%s: %s)", pr.get("number"),
+                               type(e).__name__, e)
+
     write_part(root, ENRICH_FILE, lines)
     write_part(root, PRS_FILE, prs)
-    logger.info("enrich: %d PR(s), %d comment(s) tracked (%s)", len(prs), len(lines), root)
-    return {"prs": len(prs), "comments": len(lines)}
+    logger.info("enrich: %d PR(s) reviewed, %d unreviewed (control group%s), "
+                "%d comment(s) tracked (%s)", len(prs) - unreviewed, unreviewed,
+                "" if control_group and only_pr is None else ": off", len(lines), root)
+    return {"prs": len(prs) - unreviewed, "unreviewed": unreviewed, "comments": len(lines)}

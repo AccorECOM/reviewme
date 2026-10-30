@@ -351,6 +351,10 @@ def _start_dashboard(logger: logging.Logger) -> None:
 
 def watch(config: Config, options: WatchOptions, logger: logging.Logger) -> int:
     """The loop. Returns the process exit code."""
+    # The ledger reads the trigger from the environment (`ledger.trigger`): reviews started
+    # by this loop are `watch`, unless the deployment named them itself. Set here, in the
+    # process that owns the loop, not per round: `watch_once` stays free of side effects.
+    os.environ.setdefault("REVIEWME_TRIGGER", "watch")
     try:
         clone = check_clone(config.repo_path, config.github_repo)
     except WatchError as e:

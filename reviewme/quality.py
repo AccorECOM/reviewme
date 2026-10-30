@@ -73,7 +73,9 @@ def compute(findings: list[dict], runs: list[dict], enrich: list[dict],
             prs: list[dict]) -> dict:
     live = [f for f in findings if f.get("variant", "live") == "live"]
     last_enrich = latest(enrich, "comment_id")
-    last_pr = latest(prs, "pr")
+    # Approximate misses are measured on PRs the bot reviewed: on a control-group PR
+    # (`reviewed = false`) every human comment is "where the bot said nothing" by design.
+    last_pr = {k: p for k, p in latest(prs, "pr").items() if p.get("reviewed", True)}
 
     # A finding posted INLINE = one comment_id; we keep its first appearance. Findings
     # delivered in a global comment (`global` mode, 422 fallback) have no line to track:
