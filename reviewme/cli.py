@@ -8,8 +8,12 @@ Additional commands:
   `reviewme init-project <repo>`  creates `config/projects/<repo>/` from the skeleton
   `reviewme projects`             lists projects and their reviewers
   `reviewme enrich --since 14d`   what happened to posted comments (👍/👎, replies, follow-up)
+  `reviewme triage --since 14d`   optional LLM sort of contested findings and misses (`triage.py`)
   `reviewme export --since 7d`    analysis archive + readable report (see `export.py`)
+  `reviewme history --since 2024-01-01`  the team's merged/closed PRs over years (`pr_history.py`)
+  `reviewme stats --html F`       standalone dashboard built from the ledger (`dashboard/`)
   `reviewme doctor`               LLM gateway diagnostics (variables, fingerprints, probes)
+  `reviewme demo-data --out DIR`  development aid: synthetic ledger + dashboard (`demo.py`)
 """
 from __future__ import annotations
 
@@ -78,13 +82,43 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
     st = sub.add_parser("stats", help="Aggregated statistics (counters, no content)")
     st.add_argument("--html", metavar="FILE",
-                    help="Write a standalone HTML report instead of printing the summary")
+                    help="Write the HTML dashboard (ledger, `[stats]` of project.toml) "
+                    "instead of printing the summary")
     st.add_argument("--json", action="store_true", help="Raw JSON output")
 
     en = sub.add_parser("enrich", help="What happened to posted comments (GitHub read-only)")
     en.add_argument("--since", default="14d", help="Window, e.g. 14d or 36h (default: 14d)")
     en.add_argument("--pr", dest="en_pr", type=int, help="A single PR")
     en.add_argument("--repo", dest="en_repo", help="OWNER/REPO (otherwise GITHUB_REPO)")
+
+    hi = sub.add_parser("history", help="Scan the repository's merged and closed PRs since a "
+                        "date into the ledger (history.jsonl, GitHub read-only)",
+                        description="One-off, re-runnable scan of the PR workflow before "
+                        "and after the bot: one GraphQL query per 100 PRs. The most recent "
+                        "row per PR wins, so running it again refreshes the rows.")
+    hi.add_argument("--since", required=True,
+                    help="First PR creation date, YYYY-MM-DD (or a window such as 730d)")
+    hi.add_argument("--repo", dest="hi_repo", help="OWNER/REPO (otherwise GITHUB_REPO)")
+    hi.add_argument("--jira", action="store_true",
+                    help="Also link each PR to its Jira ticket (from the branch name) and "
+                    "count bug tickets per month (JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN)")
+
+    tr = sub.add_parser("triage", help="Optional LLM classification of developer replies "
+                        "and human comments (ledger only, needs [ledger] include_text)",
+                        description="Reads the reply texts already in the ledger and gives "
+                        "each contested finding one cause (false positive, missing context, "
+                        "pre-existing, ...), then groups the human comments the bot did not "
+                        "anticipate into recurring patterns. One tool-less model call per "
+                        "batch; writes ledger/triage/ only, never GitHub or the config.")
+    tr.add_argument("--since", default="14d", help="Window, e.g. 14d or 36h (default: 14d)")
+    tr.add_argument("--repo", dest="tr_repo", default="",
+                    help="Only this OWNER/REPO's rows (default: every repo in the ledger)")
+    tr.add_argument("--dry-run", dest="tr_dry_run", action="store_true",
+                    help="Show what would be sent (counts, calls, size); call nothing, "
+                    "write nothing")
+    tr.add_argument("--max-budget-usd", dest="tr_budget", type=float, default=None,
+                    help="Budget of the whole pass (default: [stats.triage] max_budget_usd "
+                    "or 0.50)")
 
     ex = sub.add_parser("export", help="Analysis archive (JSONL) + weekly-report.md")
     ex.add_argument("--since", default="7d", help="Window, e.g. 7d (default: 7d)")
@@ -94,6 +128,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                         "and whether each credential is accepted (no secret printed)")
     dr.add_argument("--model", default="", help="Model to request in the probe")
     dr.add_argument("--no-probe", action="store_true", help="Only describe the environment")
+    # Development aid, kept out of the help list: synthetic data must never be mistaken
+    # for a team's real numbers, so nothing advertises it next to the real commands.
+    dd = sub.add_parser("demo-data")
+    dd.add_argument("--out", required=True, help="Output folder (ledger + dashboard)")
+    dd.add_argument("--seed", type=int, default=1, help="Random seed (default 1)")
+    dd.add_argument("--days", type=int, default=90, help="Window in days (default 90)")
+    dd.add_argument("--language", default="en", choices=("en", "fr"))
+    dd.add_argument("--now", default="", help="Generation date YYYY-MM-DD (default: now)")
     return parser.parse_args(argv)
 
 
@@ -227,12 +269,11 @@ def _feedback(args) -> int:
 def _stats(args) -> int:
     import json
 
-    from .report import ecrire
     from .stats import resume
 
     if args.html:
-        chemin = ecrire(Path(args.html))
-        print(f"Report written: {chemin}")
+        chemin = _write_dashboard(Path(args.html))
+        print(f"Dashboard written: {chemin}")
         return 0
 
     r = resume()
@@ -251,6 +292,16 @@ def _stats(args) -> int:
     print(f"  average cost per PR    : {r['cout_moyen_par_pr']:.2f} $")
     _print_quality()
     return 0
+
+
+def _write_dashboard(dest: Path) -> Path:
+    from .dashboard import write
+    from .dashboard.settings import active_settings
+    from .ledger import ledger_dir
+    from .stats import STATS_FILE
+
+    settings, language = active_settings()
+    return write(dest, ledger_dir(), settings, language, STATS_FILE)
 
 
 def _print_quality() -> None:
@@ -276,7 +327,7 @@ def _print_quality() -> None:
 
 
 def _enrich(args) -> int:
-    from .enrich import enrich, parse_since
+    from .enrich import control_group, enrich, parse_since
     from .github_client import GitHubClient
     from .ledger import include_text, ledger_dir
     from .projects import ProjectConfigError, resolve_project
@@ -288,35 +339,181 @@ def _enrich(args) -> int:
         print("Error: --repo required (or GITHUB_REPO in .env)", file=sys.stderr)
         return 2
     try:
-        with_text = include_text(resolve_project(config))
+        project = resolve_project(config)
     except ProjectConfigError:
-        with_text = include_text(None)
+        project = None
+    with_text, control = include_text(project), control_group(project)
     logger = setup_logging()
     gh = GitHubClient(config)
     try:
         r = enrich(gh, ledger_dir(config), parse_since(args.since), logger,
-                   with_text=with_text, only_pr=args.en_pr, bot_login=config.bot_login)
+                   with_text=with_text, only_pr=args.en_pr, bot_login=config.bot_login,
+                   control_group=control)
     finally:
         gh.close()
-    print(f"{r['prs']} PR, {r['comments']} comment(s) tracked.")
+    print(f"{r['prs']} PR, {r['comments']} comment(s) tracked, "
+          f"{r['unreviewed']} unreviewed PR(s) recorded.")
+    return 0
+
+
+def _history(args) -> int:
+    from .github_client import GitHubClient
+    from .ledger import ledger_dir
+    from .pr_history import HistoryScanError, parse_date, scan
+
+    config = load_config(require_repo=False)
+    if args.hi_repo:
+        config = dataclasses.replace(config, github_repo=args.hi_repo)
+    if not config.github_repo:
+        print("Error: --repo required (or GITHUB_REPO in .env)", file=sys.stderr)
+        return 2
+    try:
+        since = parse_date(args.since)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    jira = None
+    if args.jira:
+        from .context.jira_stats import JiraClient
+        jira = JiraClient.from_env()
+        if jira is None:
+            print("Error: --jira needs JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN "
+                  "(JIRA_KEY_PREFIX and JIRA_BUG_TYPES optional). Run without --jira to "
+                  "scan GitHub only.", file=sys.stderr)
+            return 2
+    logger = setup_logging()
+    gh = GitHubClient(config)
+    try:
+        r = scan(gh, ledger_dir(config), since, logger, repo=config.github_repo,
+                 bot_login=config.bot_login, review_label=config.review_label, jira=jira)
+    except HistoryScanError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        gh.close()
+        if jira is not None:
+            jira.close()
+    print(f"{r['prs']} PR(s) since {since.date()} ({r['merged']} merged, "
+          f"{r['bot_reviewed']} reviewed by the bot), {r['pages']} GraphQL page(s).")
+    if "jira" in r:
+        j = r["jira"]
+        print(f"Jira: {j['linked_prs']} PR(s) linked to {j['found']} ticket(s) "
+              f"({j['bug_prs']} on a bug), {r['bug_months']} month(s) of bug counts, "
+              f"{r['jira_calls']} call(s).")
+    if r.get("message"):
+        print(f"Stopped early: {r['message']}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _demo_data(args) -> int:
+    from datetime import UTC, datetime
+
+    from .demo import build_demo
+    try:
+        now = datetime.fromisoformat(args.now).replace(tzinfo=UTC) if args.now else None
+    except ValueError:
+        print("Error: --now expects YYYY-MM-DD", file=sys.stderr)
+        return 2
+    if args.days < 14:
+        print("Error: --days must be at least 14", file=sys.stderr)
+        return 2
+    r = build_demo(Path(args.out), seed=args.seed, days=args.days, language=args.language,
+                   now=now)
+    print(f"Synthetic ledger: {r['prs_reviewed']} reviewed and {r['prs_unreviewed']} "
+          f"unreviewed PR(s), {r['runs']} run(s), {r['findings']} finding(s), "
+          f"{r['history']} history row(s). Dashboard: {r['page']}")
+    return 0
+
+
+def _triage(args) -> int:
+    from .enrich import parse_since
+    from .ledger import ledger_dir
+    from .projects import resolve_project
+    from .triage import triage
+
+    try:
+        config = load_config(require_repo=False)
+    except RuntimeError:
+        # No GitHub credentials: fine, the triage reads the ledger only. A placeholder lets
+        # `load_config` read the rest of the environment the usual way, and is removed
+        # before anything runs so it never reaches the CLI subprocess.
+        os.environ["GITHUB_TOKEN"] = "unused-by-triage"
+        try:
+            config = dataclasses.replace(load_config(require_repo=False), github_token="")
+        finally:
+            os.environ.pop("GITHUB_TOKEN", None)
+    try:
+        project = resolve_project(config)
+    except ProjectConfigError as e:
+        # Unlike `enrich`, this command is driven by `[stats.triage]`: a broken table must
+        # not silently run with another model or budget.
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    if not project.stats_triage_enabled:
+        print("triage disabled by config ([stats.triage] enabled = false).")
+        return 0
+    try:
+        since = parse_since(args.since)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    budget = project.stats_triage_max_budget_usd if args.tr_budget is None else args.tr_budget
+    if budget <= 0:
+        print("Error: --max-budget-usd must be > 0", file=sys.stderr)
+        return 2
+    model = project.stats_triage_model or os.environ.get("CLAUDE_MODEL", "")
+    wrong = dict(project.stats_judgment).get("wrong", ("-1",))
+    r = triage(ledger_dir(config), since, config, language=project.language, model=model,
+               budget=budget, repo=args.tr_repo.strip(), dry_run=args.tr_dry_run,
+               project=project.name, wrong_reactions=tuple(wrong), logger=setup_logging())
+    status = r["status"]
+    if status == "nothing":
+        print(f"nothing to triage: no contested finding and no human comment in {args.since}.")
+        return 0
+    if status == "no_text":
+        print(f"nothing to triage: enable [ledger] include_text ({r['without_text']} "
+              f"contested finding(s) or PR(s) without text in {args.since}; the texts are "
+              f"collected by the next `reviewme enrich`).")
+        return 0
+    if status == "dry_run":
+        print(f"dry run: {r['threads']} contested finding(s) and {r['misses']} human "
+              f"comment(s) in {r['batches']} call(s), {r['prompt_chars']} characters "
+              f"(~{r['prompt_chars'] // 4} input tokens), budget {budget:.2f} $. Nothing "
+              f"sent, nothing written.")
+        return 0
+    if status in ("parse_error", "error"):
+        print(f"triage failed ({status}) after {r['calls']} call(s), {r['cost_usd']:.4f} $: "
+              f"nothing written. REVIEWME_DEBUG=1 shows the end of the answer.",
+              file=sys.stderr)
+        return 1
+    causes = ", ".join(f"{k} {n}" for k, n in r["causes"].items()) or "none"
+    print(f"{r['classified']} finding(s) classified"
+          + (f" ({r['unclassified']} without an answer)" if r["unclassified"] else "")
+          + f", {r['patterns']} recurring miss pattern(s) from {r['misses']} comment(s), "
+          f"{r['calls']} call(s), {r['cost_usd']:.4f} $ ({r['model']}).")
+    print(f"  causes: {causes}")
+    if status == "partial":
+        print(f"  budget of {budget:.2f} $ reached: part of the window is not classified.")
+    print(f"  written: {r['path']}")
     return 0
 
 
 def _export(args) -> int:
+    from .dashboard.settings import active_settings
     from .enrich import parse_since
-    from .export import export
+    from .export import DASHBOARD_FILE, export
     from .ledger import ledger_dir
-    from .projects import ProjectConfigError, resolve_project
     repo = args.ex_repo or os.environ.get("GITHUB_REPO", "")
-    # Report language: the project's if known, otherwise REVIEWME_LANGUAGE.
-    try:
-        language = resolve_project(load_config(require_repo=False)).language
-    except (ProjectConfigError, RuntimeError, ValueError):
-        language = os.environ.get("REVIEWME_LANGUAGE", "en")
-    archive, rapport = export(ledger_dir(), Path(args.out), parse_since(args.since),
-                              repo=repo, since_label=f"({args.since})", language=language)
+    # Report language and dashboard settings: the project's if known, else the defaults.
+    settings, language = active_settings()
+    out = Path(args.out)
+    archive, rapport = export(ledger_dir(), out, parse_since(args.since),
+                              repo=repo, since_label=f"({args.since})", language=language,
+                              settings=settings)
     print(f"Archive: {archive}")
     print(f"Report: {rapport}")
+    print(f"Dashboard: {out / DASHBOARD_FILE}")
     return 0
 
 
@@ -359,6 +556,12 @@ def main() -> None:
         raise SystemExit(_enrich(args))
     if args.command == "export":
         raise SystemExit(_export(args))
+    if args.command == "triage":
+        raise SystemExit(_triage(args))
+    if args.command == "history":
+        raise SystemExit(_history(args))
+    if args.command == "demo-data":
+        raise SystemExit(_demo_data(args))
 
     if args.pr is None:
         print("Usage: reviewme review --repo OWNER/REPO --pr N [--dry-run] [--force]", file=sys.stderr)

@@ -38,16 +38,32 @@ def _row(cid, line, fate="posted", conf=90, rule="r1", sev="IMPORTANT", content=
 
 
 class _GH:
-    def __init__(self, file_content, comments, reactions=None, threads=None, perm="write"):
+    def __init__(self, file_content, comments, reactions=None, threads=None, perm="write",
+                 reviews=None, updated=None, comments_by_pr=None):
         self.file_content, self.comments = file_content, comments
         self.reactions, self.threads, self.perm = reactions or {}, threads or [], perm
+        self.reviews, self.updated = reviews or {}, updated or []
+        self.comments_by_pr = comments_by_pr or {}
+        self.calls: list[tuple] = []
 
     def get_pr(self, n):
+        self.calls.append(("get_pr", n))
         return {"number": n, "head": {"sha": "h2"}, "user": {"login": "alice"},
-                "state": "closed", "merged_at": "2099-01-02T00:00:00Z"}
+                "state": "closed", "merged_at": "2099-01-02T00:00:00Z",
+                "created_at": "2098-12-31T08:00:00Z", "additions": 40, "deletions": 2,
+                "changed_files": 3}
 
     def list_review_comments(self, n):
-        return self.comments
+        self.calls.append(("comments", n))
+        return self.comments_by_pr.get(n, self.comments)
+
+    def list_pr_reviews(self, n):
+        self.calls.append(("reviews", n))
+        return self.reviews.get(n, [])
+
+    def list_prs_updated_since(self, since):
+        self.calls.append(("list", since))
+        return self.updated
 
     def review_threads(self, n):
         return self.threads
@@ -138,7 +154,8 @@ def test_follow_through_and_reactions():
     by = {line["comment_id"]: line for line in lines}
     assert by[1]["fingerprint_gone_at"] == "h2"          # `let x = y!` is gone
     assert by[2]["fingerprint_gone_at"] is None          # `let z = 1` is still there
-    assert by[1]["reactions"] == [{"content": "+1", "user": "dev", "role": "other"}]
+    assert by[1]["reactions"] == [{"content": "+1", "user": "dev", "role": "other",
+                                   "ts": None}]
     assert by[2]["reactions"][0]["role"] == "pr_author"
     assert by[1]["thread_resolved"] is True and by[1]["resolved_by"] == "dev"
     assert by[2]["replies"][0]["contests"] is True
@@ -248,3 +265,132 @@ def test_report_in_french():
             "enrich.jsonl": lines, "prs.jsonl": [pr]}
     text = ex.report(data, ex.quality_of(data), "o/r", "", "fr")
     assert "## Stats classiques" in text and "## Stats fun" in text
+
+
+def test_every_reaction_kept_except_machines():
+    """🚀, 👀… are kept for the dashboard's vocabulary; other bots and the bot are not."""
+    rows = [_row(1, 10, content="let x = y!")]
+    reactions = {1: [
+        {"content": "rocket", "user": {"login": "dev"}, "created_at": "2099-01-01T05:00:00Z"},
+        {"content": "eyes", "user": {"login": "alice"}, "created_at": "2099-01-01T03:00:00Z"},
+        {"content": "+1", "user": {"login": "copilot[bot]", "type": "Bot"},
+         "created_at": "2099-01-01T00:30:00Z"},
+        {"content": "heart", "user": {"login": "reviewme-bot"},
+         "created_at": "2099-01-01T00:10:00Z"},
+    ]}
+    gh = _GH("", [_bot(1, 10), _human(3, 10, "ok", parent=1)], reactions=reactions)
+    (line,), _ = en.enrich_pr(gh, 7, rows, {}, with_text=False, logger=LOGGER,
+                              bot_login="reviewme-bot")
+    assert [r["content"] for r in line["reactions"]] == ["rocket", "eyes"]
+    assert line["reactions"][1] == {"content": "eyes", "user": "alice", "role": "pr_author",
+                                    "ts": "2099-01-01T03:00:00Z"}
+    # Earliest human signal: the reply at 01:00, before the reactions; machines ignored.
+    assert line["first_signal_at"] == "2099-01-01T01:00:00Z"
+
+
+def test_first_signal_survives_a_removed_reaction():
+    rows = [_row(1, 10, content="let x = y!")]
+    previous = {1: {"comment_id": 1, "first_signal_at": "2098-12-31T23:00:00+00:00"}}
+    (line,), _ = en.enrich_pr(_GH("", [_bot(1, 10)]), 7, rows, previous, with_text=False,
+                              logger=LOGGER)
+    assert line["first_signal_at"] == "2098-12-31T23:00:00+00:00"
+    assert en.earliest("2099-01-01T01:00:00Z", "2099-01-01T00:30:00+00:00", None,
+                       "bad") == "2099-01-01T00:30:00+00:00"
+
+
+def test_non_vote_reactions_keep_the_verdict():
+    """👀 is a human signal (answered) but neither approves nor contests."""
+    rows = [_row(1, 10, content="a")]
+    enrich = [{"comment_id": 1, "replies": [],
+               "reactions": [{"content": "eyes", "user": "dev", "role": "other"}]}]
+    t = compute(rows, [], enrich, [])["by_reviewer"]["tech"]
+    assert (t["approved"], t["contested"], t["answered"]) == (0, 0, 1)
+
+
+def _review(rid, user, at, state="APPROVED", bot=False):
+    return {"id": rid, "user": {"login": user, **({"type": "Bot"} if bot else {})},
+            "state": state, "submitted_at": at}
+
+
+def test_pr_cycle_fields():
+    """First human review: neither the author, nor the bot (by its comments), nor a tool."""
+    rows = [_row(1, 10, content="let x = y!")]
+    bot = {**_bot(1, 10), "pull_request_review_id": 50}
+    reviews = {7: [_review(50, "alice-pat", "2099-01-01T00:05:00Z", "COMMENTED"),  # the bot
+                   _review(51, "alice", "2099-01-01T00:10:00Z", "COMMENTED"),      # author
+                   _review(52, "sonar[bot]", "2099-01-01T00:20:00Z", bot=True),
+                   _review(53, "carol", None, "PENDING"),
+                   _review(54, "dev", "2099-01-01T09:00:00Z", "CHANGES_REQUESTED"),
+                   _review(55, "carol", "2099-01-01T07:00:00Z")]}
+    _, pr = en.enrich_pr(_GH("", [bot], reviews=reviews), 7, rows, {}, with_text=False,
+                         logger=LOGGER)
+    assert pr["reviewed"] is True and pr["control_group"] is False
+    assert pr["created_at"] == "2098-12-31T08:00:00Z"
+    assert pr["first_human_review_at"] == "2099-01-01T07:00:00Z" and pr["human_reviews"] == 2
+    assert (pr["additions"], pr["deletions"], pr["changed_files"]) == (40, 2, 3)
+    assert pr["first_bot_run_at"] == TS and pr["merged_at"] == "2099-01-02T00:00:00Z"
+
+
+def test_enrich_writes_reviewed_and_unreviewed_prs():
+    """Control group: every PR updated in the window with no run of any kind."""
+    from reviewme.ledger import read_all
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_part(root, FINDINGS_FILE, [_row(1, 10, content="let x = y!")])
+        write_part(root, RUNS_FILE, [
+            {"ts": "2098-06-01T00:00:00+00:00", "pr": 7, "variant": "live", "head_sha": "h0"},
+            {"ts": TS, "pr": 7, "variant": "live", "head_sha": "h1"},
+            {"ts": TS, "pr": 8, "variant": "live", "head_sha": "h8"},        # found nothing
+            {"ts": TS, "pr": 9, "variant": "live", "head_sha": "h9", "dry_run": True}])
+        human = _human(30, 5, "Why?", user="carol")
+        gh = _GH("", [_bot(1, 10)], updated=[
+            {"number": n, "user": {"login": "erin"}, "state": "closed",
+             "merged_at": "2099-01-03T00:00:00Z", "created_at": "2099-01-01T00:00:00Z",
+             "head": {"sha": f"x{n}"}} for n in (7, 8, 9, 20)] + [
+            {"number": 21, "user": {"login": "dependabot[bot]", "type": "Bot"},
+             "state": "open", "merged_at": None}],
+            comments_by_pr={20: [human, _human(31, 5, "Because", parent=30, user="erin")]},
+            reviews={20: [_review(60, "carol", "2099-01-02T00:00:00Z")]})
+        r = en.enrich(gh, root, timedelta(days=3650), LOGGER, with_text=False,
+                      control_group=True)
+        lines = {p["pr"]: p for p in read_all(root, en.PRS_FILE)}
+    assert r == {"prs": 2, "unreviewed": 1, "comments": 1}
+    assert set(lines) == {7, 8, 20}                  # 9: dry-run only; 21: a tool's PR
+    assert lines[7]["reviewed"] and lines[7]["control_group"]
+    assert lines[7]["first_bot_run_at"] == "2098-06-01T00:00:00+00:00"   # before the window
+    assert lines[8]["reviewed"] is True
+    u = lines[20]
+    assert (u["reviewed"], u["state"], u["author"], u["merged_at"]) == (
+        False, "merged", "erin", "2099-01-03T00:00:00Z")
+    assert (u["human_comments"], u["human_replies"], u["human_reviews"]) == (1, 1, 1)
+    assert u["first_human_review_at"] == "2099-01-02T00:00:00Z"
+    assert u["additions"] is None and u["first_bot_run_at"] is None
+    # Bounded cost: no `get_pr` for an unreviewed PR, two calls each.
+    assert [c for c in gh.calls if c[1] == 20] == [("comments", 20), ("reviews", 20)]
+
+
+def test_control_group_off_and_single_pr():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_part(root, FINDINGS_FILE, [_row(1, 10, content="let x = y!")])
+        gh = _GH("", [_bot(1, 10)], updated=[{"number": 20, "user": {"login": "erin"}}])
+        r = en.enrich(gh, root, timedelta(days=3650), LOGGER, with_text=False)
+        assert r["unreviewed"] == 0 and not any(c[0] == "list" for c in gh.calls)
+        r = en.enrich(gh, root, timedelta(days=3650), LOGGER, with_text=False, only_pr=7,
+                      control_group=True)
+        assert r["unreviewed"] == 0 and not any(c[0] == "list" for c in gh.calls)
+
+
+def test_control_group_setting(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.delenv("REVIEWME_CONTROL_GROUP", raising=False)
+    assert en.control_group(None) is True
+    assert en.control_group(SimpleNamespace(stats_control_group=False)) is False
+    monkeypatch.setenv("REVIEWME_CONTROL_GROUP", "1")
+    assert en.control_group(SimpleNamespace(stats_control_group=False)) is True
+
+
+def test_control_group_is_not_a_miss():
+    unreviewed = {"pr": 20, "reviewed": False, "human_comments": 5}
+    reviewed = {"pr": 7, "human_comments": 2, "human_comments_on_silent_lines": 1}
+    assert compute([], [], [], [unreviewed, reviewed])["misses"]["human_comments"] == 2

@@ -96,6 +96,13 @@ def resume(chemin: Path | None = None) -> dict:
         a["postes"] += r.get("postes", 0)
         a["cout"] += r.get("cout_usd", 0)
 
+    # Engagement counters are a SNAPSHOT of one PR's open findings at run time, not an
+    # increment: the PR's last run holds its current state, and PRs add up. (A `max` over
+    # every run kept the single busiest PR, whatever the number of PRs.)
+    dernier_par_pr: dict = {}
+    for r in runs:
+        dernier_par_pr[r["pr"]] = r
+
     return {
         "runs": len(runs),
         "prs": len(prs),
@@ -103,8 +110,9 @@ def resume(chemin: Path | None = None) -> dict:
         "remarques_dedupliquees": dedup,          # what we avoided reposting
         "remarques_sous_seuil": sum(r.get("sous_seuil", 0) for r in runs),
         "reponses_dans_threads": sum(r.get("reponses", 0) for r in runs),
-        "remarques_avec_reponse": max((r.get("remarques_avec_reponse", 0) for r in runs), default=0),
-        "remarques_ouvertes": max((r.get("remarques_ouvertes", 0) for r in runs), default=0),
+        "remarques_avec_reponse": sum(r.get("remarques_avec_reponse", 0)
+                                      for r in dernier_par_pr.values()),
+        "remarques_ouvertes": sum(r.get("remarques_ouvertes", 0) for r in dernier_par_pr.values()),
         "cout_total_usd": round(cout, 2),
         "cout_moyen_par_pr": round(cout / len(prs), 3) if prs else 0,
         "remarques_par_pr": round(postes / len(prs), 1) if prs else 0,

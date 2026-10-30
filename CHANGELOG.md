@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.4.0
+
+- Statistics dashboard built from the ledger (`reviewme/dashboard/`): one self-contained
+  HTML page, English or French, with the sections `summary` (opens with a generated
+  debrief), `quality`, `usage`, `cost`, `reliability`, `tuning`, `history`, `roi` and
+  `hall_of_fame`, and a one-line reading under every chart. Written by `reviewme stats
+  --html`, `reviewme export` and served by `reviewme-web` on `/dashboard`. It never shows
+  a PR title, a finding or a reply.
+- `[stats]` in `project.toml`: sections, names (`login` or `masked`), window, period
+  (week or sprint), reaction meanings (`[stats.judgment]`), ROI assumptions
+  (`[stats.roi]`), named periods (`[[stats.eras]]`, with an optional earlier bot's
+  `label` and `bot_login`), `control_group`, `debrief`, `bot_since`.
+- `reviewme enrich` keeps every reaction and the first human signal per finding, PR
+  cycle fields in `prs.jsonl`, and unreviewed PRs as a control group.
+- `reviewme history --since DATE [--jira]`: read-only scan of merged PRs into
+  `history.jsonl` (cycle times, human reviews, hotfix and fix branches, Jira bug
+  tickets), to compare before and after the bot.
+- `reviewme triage --since 14d`: optional tool-less LLM pass classifying contested
+  findings and recurring misses into `triage.jsonl` (needs `[ledger] include_text`).
+- `trigger` recorded on every ledger row (`REVIEWME_TRIGGER`).
+- `reviewme demo-data`: a realistic synthetic ledger to judge the dashboard.
+- Fixes: `stats.json` `duree_s` was always 0; replies to open findings were the maximum
+  over runs instead of the sum over PRs.
+
 ## 1.3.0
 
 - Factual review output. The output contract asks for the defect and its trigger in

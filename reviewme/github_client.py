@@ -6,6 +6,10 @@ What inline comments and the thread lifecycle require:
 - reply_to_comment     : reply in an existing thread (re-anchoring / dev dialogue)
 - list_open_prs        : "any open PR" mode (no label filter)
 - get_authenticated_login : the token's identity
+- list_pr_reviews / list_prs_updated_since : read-only, for `reviewme enrich` (PR cycle
+  times and the control group of PRs the bot never reviewed)
+- closed_prs_page : read-only GraphQL, for `reviewme history` (the team's PR workflow
+  over years, before and after the bot)
 
 Thread resolve/unresolve (GraphQL `resolveReviewThread`) is deliberately ABSENT: GitHub
 already collapses outdated comments, the bot replies "no longer appears" in the thread,
@@ -15,12 +19,22 @@ token). READING the threads' state (`review_threads`) feeds the ledger.
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 
 import httpx
 
 from .config import Config
 
 API_BASE = "https://api.github.com"
+
+
+def _parse_iso(ts: str | None) -> datetime:
+    """GitHub `…Z` or ledger `…+00:00` timestamp; unreadable = the oldest possible date."""
+    try:
+        dt = datetime.fromisoformat(ts or "")
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 class GitHubApiError(RuntimeError):
@@ -195,6 +209,56 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
 
+    def list_pr_reviews(self, pr_number: int) -> list[dict]:
+        """The PR's submitted reviews (approve, request changes, comment), paginated.
+
+        Note: every reply typed in a review thread is a `COMMENTED` review too; the caller
+        decides what counts as a review.
+        """
+        reviews: list[dict] = []
+        page = 1
+        while True:
+            resp = self._request(
+                "GET", f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/reviews",
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            reviews.extend(batch)
+            # A short page is the last one: no extra request for an empty page. It runs
+            # for every PR of the nightly pass, reviewed or not.
+            if len(batch) < 100:
+                break
+            page += 1
+        return reviews
+
+    def list_prs_updated_since(self, since_iso: str) -> list[dict]:
+        """Every PR (open, closed, merged) updated at or after `since_iso`, newest first.
+
+        The list endpoint has no `since` filter: sort by `updated` descending and stop at
+        the first page that reaches past the window, so the cost follows the window, not
+        the repository's age. List objects lack `additions` / `deletions`.
+        """
+        since = _parse_iso(since_iso)
+        prs: list[dict] = []
+        page = 1
+        while True:
+            resp = self._request(
+                "GET", f"{API_BASE}/repos/{self._repo}/pulls",
+                params={"state": "all", "sort": "updated", "direction": "desc",
+                        "per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            fresh = [p for p in batch if _parse_iso(p.get("updated_at")) >= since]
+            prs.extend(fresh)
+            if len(fresh) < len(batch) or len(batch) < 100:
+                break
+            page += 1
+        return prs
+
     def list_pr_commits(self, pr_number: int) -> list[dict]:
         """The PR's commits, oldest to newest (250 at most, API limit)."""
         commits: list[dict] = []
@@ -232,6 +296,18 @@ class GitHubClient:
             return "none"
         return resp.json().get("permission", "none")
 
+    def graphql(self, query: str, variables: dict) -> dict:
+        """One GraphQL call: its `data`. Raises GitHubApiError on an HTTP error, or on errors
+        that came back without any data (a partial answer is the caller's to judge)."""
+        resp = self._request("POST", f"{API_BASE}/graphql",
+                             json={"query": query, "variables": variables})
+        if resp.status_code >= 400:
+            raise GitHubApiError(resp.status_code, resp.text)
+        body = resp.json()
+        if body.get("errors") and not body.get("data"):
+            raise GitHubApiError(resp.status_code, str(body["errors"]))
+        return body.get("data") or {}
+
     def review_threads(self, pr_number: int) -> list[dict]:
         """Review threads (resolved or not) via GraphQL — the REST API does not expose this."""
         owner, name = self._repo.split("/")
@@ -242,12 +318,9 @@ class GitHubClient:
         nodes: list[dict] = []
         after = None
         for _ in range(20):                # 2,000 threads at most: beyond that, it is no longer a PR
-            resp = self._request("POST", f"{API_BASE}/graphql", json={
-                "query": query,
-                "variables": {"o": owner, "n": name, "pr": pr_number, "after": after}})
-            resp.raise_for_status()
-            data = resp.json()
-            pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+            data = self.graphql(query, {"o": owner, "n": name, "pr": pr_number,
+                                        "after": after})
+            pr = ((data.get("repository") or {}).get("pullRequest") or {})
             threads = pr.get("reviewThreads") or {}
             nodes.extend(threads.get("nodes") or [])
             info = threads.get("pageInfo") or {}
@@ -255,6 +328,40 @@ class GitHubClient:
                 break
             after = info.get("endCursor")
         return nodes
+
+    #: `reviewme history`: closed and merged PRs, newest created first, with what a
+    #: workflow comparison needs and nothing written by a person except review bodies,
+    #: which are only read to recognise the bot's own reviews (never stored). Cost: about
+    #: 2 points per page of 100 (the PR page, then nested `reviews`, `labels` and
+    #: `reviewThreads` connections per PR); `rateLimit` comes back with every page for
+    #: free. Each thread's first comment author is read so that a bot of an earlier era
+    #: that posted under a person's login can be told apart later (`[[stats.eras]]
+    #: bot_login`): only the login is kept, never the comment.
+    _CLOSED_PRS = """query($o:String!,$n:String!,$first:Int!,$after:String){
+      rateLimit{cost remaining resetAt}
+      repository(owner:$o,name:$n){pullRequests(states:[MERGED,CLOSED],
+        orderBy:{field:CREATED_AT,direction:DESC},first:$first,after:$after){
+        pageInfo{hasNextPage endCursor}
+        nodes{number createdAt mergedAt closedAt additions deletions changedFiles
+          baseRefName headRefName isDraft author{login __typename}
+          reviews(first:100){nodes{author{login __typename} state submittedAt body}}
+          comments{totalCount} commits{totalCount}
+          reviewThreads(first:100){totalCount
+            nodes{comments(first:1){nodes{author{login}}}}}
+          labels(first:20){nodes{name}}}}}}"""
+
+    def closed_prs_page(self, after: str | None, first: int = 100) -> dict:
+        """One page of the repository's merged and closed PRs, newest created first.
+
+        Returns `{"nodes", "has_next", "cursor", "rate_limit"}`. Read-only.
+        """
+        owner, name = self._repo.split("/")
+        data = self.graphql(self._CLOSED_PRS, {"o": owner, "n": name, "first": first,
+                                               "after": after})
+        prs = (data.get("repository") or {}).get("pullRequests") or {}
+        info = prs.get("pageInfo") or {}
+        return {"nodes": prs.get("nodes") or [], "has_next": bool(info.get("hasNextPage")),
+                "cursor": info.get("endCursor"), "rate_limit": data.get("rateLimit") or {}}
 
     # ------------------------------------------------------------------ writing
     def post_issue_comment(self, pr_number: int, body: str) -> dict:

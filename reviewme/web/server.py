@@ -26,9 +26,10 @@ REVIEWS_DIR = DATA_DIR / "reviews"
 STATE_FILE = DATA_DIR / "state.json"
 LOG_FILE = DATA_DIR / "reviews.log"
 
-# --- Sprint configuration (overridable: REVIEWME_SPRINT_ANCHOR_DATE, _NUM, _LENGTH_DAYS) ---
-# Anchor: the first day of a known sprint and its number; sprints then repeat every
-# SPRINT_LENGTH_DAYS. Defaults are neutral (sprint 1 starts on Monday 2026-01-05).
+# --- Sprint configuration of the legacy Hall of Fame (`/api/hall-of-fame`, reviews/ files) ---
+# Overridable: REVIEWME_SPRINT_ANCHOR_DATE, _NUM, _LENGTH_DAYS. The ledger dashboard
+# (`/dashboard`) reads `[stats] sprint_*` in project.toml instead; these variables stay as
+# the fallback of this page only. The arithmetic is shared (`dashboard.data`).
 _DEFAULT_ANCHOR_DATE = date(2026, 1, 5)
 _DEFAULT_ANCHOR_NUM = 1
 _DEFAULT_LENGTH_DAYS = 14
@@ -60,15 +61,13 @@ _REVIEW_FILE_RE = re.compile(r"_(\d{8})_(\d{6})\.json$")
 
 
 def _sprint_num_for_date(d: date) -> int:
-    anchor, num, length = _sprint_config()
-    return num + (d - anchor).days // length
+    from ..dashboard.data import sprint_number
+    return sprint_number(d, *_sprint_config())
 
 
 def _sprint_bounds(num: int) -> tuple[date, date]:
-    from datetime import timedelta
-    anchor, anchor_num, length = _sprint_config()
-    start = anchor + timedelta(days=(num - anchor_num) * length)
-    return start, start + timedelta(days=length - 1)
+    from ..dashboard.data import sprint_bounds
+    return sprint_bounds(num, *_sprint_config())
 
 
 def _fmt_day(d: date) -> str:
@@ -92,6 +91,21 @@ def _review_datetime(filename: str) -> datetime | None:
         return None
 
 
+def build_dashboard(ledger_root: Path | None = None) -> tuple[str, dict]:
+    """The ledger dashboard, rebuilt on every request: (HTML, per-section results).
+
+    Rebuilt rather than cached: a few thousand JSONL lines take milliseconds, and a page
+    that is always fresh needs no invalidation. Settings and language come from the
+    active project (`[stats]`), or the defaults.
+    """
+    from ..dashboard import build
+    from ..dashboard.settings import active_settings
+    settings, language = active_settings()
+    root = ledger_root or Path(os.environ.get("REVIEWME_LEDGER_DIR", "").strip()
+                               or DATA_DIR / "ledger").expanduser()
+    return build(root, settings, language, DATA_DIR / "stats.json")
+
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
@@ -109,6 +123,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._json(resume())
         elif parsed.path == "/api/logs":
             self._json(self._get_logs())
+        elif parsed.path == "/dashboard":
+            self._html(build_dashboard()[0])
+        elif parsed.path == "/api/dashboard":
+            self._json(build_dashboard()[1])
         elif parsed.path == "/api/hall-of-fame":
             sprint = parse_qs(parsed.query).get("sprint", [None])[0]
             self._json(self._get_hall_of_fame(sprint))
@@ -116,6 +134,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     # Read-only: no do_POST (the requeue write endpoint was removed).
+
+    def _html(self, page: str) -> None:
+        body = page.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _json(self, data) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")

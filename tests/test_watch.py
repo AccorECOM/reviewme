@@ -348,3 +348,16 @@ def test_second_watch_on_the_same_repo_is_refused():
         pass
     with watch.repo_lock("acme/other"), watch.repo_lock(REPO):
         pass
+
+
+def test_watch_marks_its_runs(monkeypatch):
+    """Reviews started by the loop are recorded as `watch`, unless the deployment says."""
+    def no_clone(*a):
+        raise watch.WatchError("no clone")
+    monkeypatch.setattr(watch, "check_clone", no_clone)
+    monkeypatch.delenv("REVIEWME_TRIGGER", raising=False)
+    assert watch.watch(_config(), WatchOptions(), LOGGER) == 2
+    assert os.environ["REVIEWME_TRIGGER"] == "watch"
+    monkeypatch.setenv("REVIEWME_TRIGGER", "schedule")
+    watch.watch(_config(), WatchOptions(), LOGGER)
+    assert os.environ["REVIEWME_TRIGGER"] == "schedule"

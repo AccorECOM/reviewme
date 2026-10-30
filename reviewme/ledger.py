@@ -83,6 +83,20 @@ def engine_commit() -> str:
     return f"v{__version__}"
 
 
+#: Documented values of `REVIEWME_TRIGGER`. Free string: a deployment may name its own.
+TRIGGERS = ("pr_build", "manual", "schedule", "watch")
+
+
+def trigger() -> str:
+    """What started the run (`REVIEWME_TRIGGER`), `unknown` when nothing says.
+
+    The engine cannot tell a CI build from a hand-run command: the deployment says it.
+    Read from the environment once per run, no I/O: it stays off the review's critical
+    path. It separates the cost of the PR flow from re-runs and experiments.
+    """
+    return os.environ.get("REVIEWME_TRIGGER", "").strip() or "unknown"
+
+
 def include_text(project) -> bool:
     """Write `message` and `suggestion`? Default no: the ledger stays free of PR content.
 
@@ -290,6 +304,7 @@ def record(pr: dict, config: Config, project, prepared: list, outcomes: list, di
             "config_hash": chash,
             "dry_run": config.dry_run,
             "status": status,
+            "trigger": trigger(),
         }
         with_text = include_text(project)
         files, lines = diff_size(diff)
