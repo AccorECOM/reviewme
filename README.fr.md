@@ -285,11 +285,12 @@ Le bot ne poste que des commentaires : jamais d'approbation ni de demande de cha
 ```mermaid
 flowchart LR
     R[review] -->|chaque remarque,<br/>postée ou non| L[(registre)]
-    N["enrich (chaque nuit)"] -->|"👍/👎, réponses,<br/>ligne corrigée ?"| L
+    N["enrich (chaque nuit)"] -->|"réactions, réponses,<br/>ligne corrigée ?"| L
     L --> S[reviewme stats]
+    L --> D["reviewme stats --html<br/>dashboard.html"]
     L --> X["reviewme export"]
     X --> A[archive JSONL<br/>pour l'analyse]
-    X --> W[weekly-report.md<br/>pour l'équipe]
+    X --> W[weekly-report.md<br/>+ dashboard.html]
 ```
 
 Le registre garde **toutes** les remarques avec leur sort et leur confiance, y compris
@@ -298,6 +299,157 @@ celles écartées. On peut donc répondre à « ce seuil nous coûte-t-il des vr
 et contestées, et la calibration par tranche de confiance. Le schéma est décrit dans
 [`docs/ledger-schema.md`](docs/ledger-schema.md) (en anglais). Le texte des remarques n'y est écrit
 que si le projet le demande (`[ledger] include_text = true`).
+
+`reviewme stats --html dashboard.html` écrit un tableau de bord autonome à partir du
+registre : une page par section (synthèse, qualité, usage, coût, ROI, fiabilité,
+réglages, historique, Hall of Fame), sans requête réseau, lisible sur téléphone. `reviewme export` écrit la même
+page à côté de `weekly-report.md`, et `reviewme-web` la sert à jour sur `/dashboard` (ses
+chiffres sur `/api/dashboard`). Elle ne montre que des compteurs, des identifiants de
+relecteurs et de règles, des numéros de PR et des logins (ou des noms masqués) : jamais un
+titre de PR, une remarque, un extrait de code ni une réponse, même avec `include_text`
+(seule exception : les manqués récurrents de `reviewme triage`, plus bas).
+Chaque graphique et chaque tableau a une ligne de lecture en dessous (tendance,
+comparaison, élément en tête), générée à partir de ses chiffres.
+Elle fonctionne sans projet ; avec un projet, `[stats]` dans `project.toml` la règle :
+
+```toml
+[stats]
+sections = ["summary", "quality", "usage", "cost", "roi", "reliability", "tuning",
+            "history", "hall_of_fame"]
+names = "login"             # ou "masked" : dev_1, dev_2… à la place des logins
+window = "90d"              # 14d, 36h…
+period = "week"             # ou "sprint"
+sprint_anchor = "2026-01-05"
+sprint_anchor_number = 1
+sprint_length_days = 14
+control_group = true        # enrich note aussi les PR que le bot n'a jamais relues
+debrief = true              # la synthèse s'ouvre sur quelques phrases générées
+bot_since = "2026-10-01"    # facultatif : le jour où le bot a démarré (défaut : 1er passage live)
+
+[stats.triage]              # facultatif : `reviewme triage` (tri des retours par un LLM)
+enabled = true              # défaut true
+model = "claude-sonnet-5-5" # défaut : CLAUDE_MODEL, sinon le défaut de la CLI
+max_budget_usd = 0.50       # budget d'un passage, défaut 0.50
+
+[stats.judgment]            # réactions GitHub -> jugement d'une remarque
+useful = ["+1", "hooray"]
+wrong = ["-1"]
+off_topic = ["confused"]
+saved_me = ["rocket"]
+
+[stats.roi]                 # facultatif : les hypothèses de l'estimation du ROI
+hourly_cost = 80            # coût d'une heure de développeur, en `currency` (obligatoire)
+currency = "EUR"            # défaut EUR
+usd_rate = 0.92             # 1 USD en `currency` (le coût API est en USD) ; défaut 1.0
+minutes_per_finding = 12    # gagnées par remarque suivie d'effet ; défaut 12
+minutes_per_blocker = 240   # gagnées par BLOCKER corrigé avant merge ; défaut 240
+human_first_review_hours = 20   # utilisé quand le groupe témoin ne le mesure pas
+```
+
+| Clé `[stats]` | Défaut | Rôle |
+|---|---|---|
+| `sections` | toutes | pages et ordre du menu : `summary`, `quality`, `usage`, `cost`, `roi`, `reliability`, `tuning`, `history`, `hall_of_fame` |
+| `names` | `"login"` | `"masked"` numérote les personnes `dev_1`, `dev_2`… par ordre d'apparition |
+| `window` | `"90d"` | période couverte (`export` utilise son propre `--since`) |
+| `period` | `"week"` | regroupement des graphiques : semaine ISO (`week`) ou `sprint` |
+| `sprint_anchor`, `sprint_anchor_number`, `sprint_length_days` | `2026-01-05`, `1`, `14` | premier jour et numéro d'un sprint connu, et durée d'un sprint |
+| `[stats.judgment]` | comme ci-dessus | réactions comptées comme `useful`, `wrong`, `off_topic`, `saved_me` |
+| `[stats.roi]` | absent | hypothèses de l'estimation du ROI (ci-dessus). Absent : la page ROI montre ses deux niveaux mesurés et dit pourquoi l'estimation est masquée ; présent : l'estimation, et une tuile « heures gagnées (estimation) » dans la synthèse. `hourly_cost` est obligatoire, chaque nombre doit être > 0 |
+| `bot_since` | premier passage live | `AAAA-MM-JJ` du démarrage du bot, pour l'avant/après des pages historique et ROI, quand le registre ne remonte pas jusque-là |
+| `[[stats.eras]]` | aucune | périodes nommées des pages historique et ROI (ci-dessous) ; présentes, elles remplacent `bot_since` |
+| `[stats.triage]` | activé, modèle de la CLI, 0.50 $ | `reviewme triage` : `enabled = false` coupe la commande, `model` choisit le modèle de ce seul appel, `max_budget_usd` plafonne un passage (`--max-budget-usd` le remplace) |
+| `debrief` | `true` | la synthèse s'ouvre sur une carte « En bref » : jusqu'à sept phrases courtes générées à partir des chiffres (sans LLM), chacune seulement quand ses données existent : volume et couverture, qualité, coût, ROI (groupe témoin, sinon l'estimation), historique (avant contre la dernière ère, sans lien de cause), incidents, règle la plus contestée. `false` la masque |
+| `control_group` | `true` | `reviewme enrich` écrit aussi une ligne `prs.jsonl` (`reviewed = false`) pour chaque PR mise à jour sur la fenêtre que le bot n'a jamais relue : deux appels GitHub en lecture par PR. Le tableau de bord en tire la couverture (PR mergées relues) et le groupe de comparaison des temps de cycle. `REVIEWME_CONTROL_GROUP=0` le coupe pour un passage |
+
+Une section ou une clé inconnue fait échouer le chargement, comme le reste de `project.toml`. Pour
+le tableau de bord, un projet invalide n'est jamais silencieux : `reviewme stats --html`
+(et `export`, `reviewme-web`) affiche un avertissement qui nomme l'erreur. Quand seuls les
+relecteurs sont en cause (un dossier qui porte le `[stats]` d'un dépôt mais pas encore de
+relecteur), la page suit quand même le `[stats]` de ce dossier ; quand `project.toml`
+lui-même est invalide, elle prend les valeurs par défaut.
+
+La page **ROI** répond à « est-ce que ça vaut le coup ? » de trois façons, de la plus à la
+moins solide, chacune étiquetée comme telle : (1) *mesuré* sur le groupe témoin, PR relues
+contre non relues de la même fenêtre (délai avant la première relecture humaine, avant
+le merge, relectures et commentaires humains par PR, rapidité du bot) ; (2) *mesuré dans
+le temps*, l'avant/après de la page historique ; (3) *estimé* à partir de `[stats.roi]` :
+remarques suivies d'effet et BLOCKER corrigés avant merge, valorisés en temps et en argent
+face au coût API, avec le point mort (remarques suivies d'effet par PR nécessaires pour
+couvrir le coût par PR), chaque hypothèse affichée à côté des chiffres.
+
+La page **historique** demande un passage ponctuel : `reviewme history --since 2024-01-01`
+lit les PR mergées et fermées du dépôt depuis cette date (une requête GraphQL pour 100 PR :
+une quarantaine de requêtes pour 4 000 PR) dans `history.jsonl`, sans titre, description
+ni texte de commentaire. Par trimestre, avec un repère au démarrage de ReviewMe : PR
+mergées par mois, heures médianes avant le merge et avant la première relecture humaine,
+relectures et fils humains par PR (et pour 100 lignes modifiées), part de branches hotfix
+ou revert et, à part, de branches de correction ordinaires `fix/` (`fix/…`, `bugfix/…`,
+`fix-…` ; un signal faible : il lit les noms de branche), et, avec `--jira`, les tickets
+de bug créés par mois. Avant/après n'est pas une preuve (l'équipe et le produit changent
+aussi) : la page le dit et renvoie au groupe témoin. Relançable à tout moment : la ligne
+la plus récente de chaque PR l'emporte.
+
+**Ères.** Quand l'histoire du bot a plus d'un début (un prototype, une pause, puis
+ReviewMe), nommez les périodes avec `[[stats.eras]]` :
+
+```toml
+[[stats.eras]]
+name = "prototype"
+since = "2026-03-10"
+label = "ai-review-poc"
+[[stats.eras]]
+name = "pause"
+since = "2026-10-09"
+[[stats.eras]]
+name = "ReviewMe"
+since = "2026-11-03"
+label = "review-me"
+```
+
+Chaque ère a un `name`, une date `since` (`AAAA-MM-JJ`, obligatoire) et un `label`
+facultatif : le label GitHub qui marquait les PR relues par le bot de cette ère. Les ères
+se suivent et sont triées par `since` (deux ères ne peuvent pas commencer le même jour) :
+une PR appartient à l'ère dont le `since` est le plus récent à sa date de création, et à
+« avant » quand elle précède la première. Dans une ère avec `label`, une PR compte comme
+relue quand le registre a un passage live pour elle ou qu'elle porte ce label. Quand le
+bot de cette ère publiait sous le compte d'une personne (un prototype lancé avec le jeton
+du mainteneur), ajoutez `bot_login = "maria"` à l'ère (il lui faut un `label`) : sur les PR
+labellisées de l'ère, les relectures et fils de ce login ne comptent plus comme humains.
+Cela lit les comptes par login que `reviewme history` enregistre depuis la 1.4.0 ; sur des
+lignes plus anciennes, la page demande de relancer la lecture. Les
+graphiques de l'historique ont alors une ligne pointillée par ère, légendée de son nom, et
+le tableau avant/après devient un tableau par ère (PR ouvertes et mergées, heures
+médianes avant le merge et avant la première relecture humaine, relectures et fils
+humains par PR, parts de revert, hotfix et `fix/`), avec deux lignes pour une ère à label
+(relues / non relues). La page ROI compare « avant » à la dernière ère. Sans ères,
+`bot_since` (ou le premier passage live) vaut une ère nommée « ReviewMe ».
+
+`--jira` utilise les variables Jira du relecteur `us` (`JIRA_BASE_URL`, `JIRA_EMAIL`,
+`JIRA_API_TOKEN`, `JIRA_KEY_PREFIX` facultatif) : la clé du ticket est lue dans le nom de
+branche, son type distingue les bugs (`Bug`, `Bogue`, `Defect`, plus les noms de
+`JIRA_BUG_TYPES`, défaut `Bug`, qui est aussi la liste comptée par mois).
+
+**Pourquoi** une remarque est contestée, c'est ce que répond `reviewme triage --since 14d`.
+Les étiquettes par mots-clés d'`enrich` sont un tri grossier ; ce passage facultatif fait
+lire à un modèle les réponses que le registre contient déjà (il faut donc `[ledger]
+include_text = true`) et donne à chaque remarque ayant une réponse ou un 👎 une cause :
+faux positif, contexte manquant (vrai, mais l'équipe le fait exprès), préexistant,
+doublon, pas important, corrigé, question, autre. Il regroupe aussi les commentaires
+humains là où le bot n'a rien dit en 8 motifs récurrents au plus, chacun avec une règle
+suggérée à écrire. La page qualité trace alors les causes (aussi par relecteur) et liste
+les manqués récurrents ; la page réglages donne la cause principale de chaque règle
+contestée. Les textes sont des données de tiers : l'appel n'a aucun outil, le prompt le
+dit, et le résultat ne va que dans `triage.jsonl`, jamais sur GitHub ni dans la config.
+Les titres et règles suggérées sont du texte de modèle sur vos PR : la page ne les
+affiche qu'avec `include_text`, l'archive les retire sinon. Un passage sur ~60 remarques
+contestées et 150 commentaires, c'est un ou deux appels, environ 0,10 à 0,25 $ avec
+Sonnet ; `--dry-run` affiche la taille sans rien appeler. À lancer chaque semaine après
+`enrich`.
+
+Chaque passage note aussi son **déclencheur** (`REVIEWME_TRIGGER` : `pr_build`, `manual`,
+`schedule`, `watch`, ou tout autre nom ; `unknown` s'il n'est pas renseigné), affiché par
+déclencheur dans la page usage. `reviewme watch` met `watch` sauf si le déploiement a mis
+le sien.
 
 ---
 
@@ -334,7 +486,9 @@ Le diff, le ticket et les commentaires sont écrits par des tiers : ce sont des
 | `reviewme projects` | lister les projets et leurs relecteurs |
 | `reviewme enrich --since 14d` | relever le devenir des remarques (job de nuit) |
 | `reviewme export --since 7d --out DIR` | archive d'analyse et rapport lisible |
-| `reviewme stats [--html F]` | compteurs et bloc qualité |
+| `reviewme triage --since 14d [--dry-run]` | facultatif : un modèle trie pourquoi les remarques sont contestées et regroupe les manqués récurrents (`include_text`, `[stats.triage]`) |
+| `reviewme history --since 2024-01-01 [--jira]` | lecture ponctuelle des PR mergées et fermées depuis une date, pour les pages avant/après (relançable) |
+| `reviewme stats [--html F]` | compteurs et bloc qualité ; `--html` écrit le tableau de bord |
 | `reviewme feedback --pr N` | réponses des devs, en règles à relire |
 | `reviewme watch --repo O/R --every 10m` | surveille les PR ouvertes et relit chacune (`--once`, `--dry-run`, `--label`) |
 | `reviewme-webhook` · `reviewme-poll` · `reviewme-web` | serveur webhook, boucle de poll (ancien nom de watch), tableau de bord |
@@ -349,6 +503,9 @@ Le diff, le ticket et les commentaires sont écrits par des tiers : ce sont des
 | `REVIEWME_INLINE_MIN_SEVERITY` | sévérité minimale en ligne (défaut `IMPORTANT`) |
 | `REVIEWME_VERIFY` | `0` coupe la vérification |
 | `REVIEWME_CONFIG_SOURCE` | `base` (défaut) ou `pr` |
+| `REVIEWME_TRIGGER` | ce qui a lancé le passage, noté dans le registre (`pr_build`, `manual`, `schedule`, `watch`) |
+| `REVIEWME_CONTROL_GROUP` | `enrich` : `0`/`1` remplace `[stats] control_group` |
+| `JIRA_BUG_TYPES` | `history --jira` : noms de types de ticket comptés comme bugs (défaut `Bug`) |
 | `REVIEWME_FAKE`, `REVIEWME_DEBUG` | sans appel au modèle ; journal détaillé |
 | `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | passerelle LLM, modèle |
 | `POLL_INTERVAL`, `REVIEWME_SKIP_LABEL` | watch : intervalle par défaut, label d'exclusion (défaut `no-ai-review`) |
@@ -356,6 +513,8 @@ Le diff, le ticket et les commentaires sont écrits par des tiers : ce sont des
 | Clé du `project.toml` | Rôle |
 |---|---|
 | `[review] language` | langue des remarques postées et des titres du bot (défaut `en`, ex. `"fr"`) |
+| `[ledger] include_text` | garder le texte des remarques et des réponses dans le registre (défaut `false`) |
+| `[stats]` | sections, noms, fenêtre, période, `bot_since`, `[stats.roi]` et `[stats.triage]` du tableau de bord (voir [Mesurer si c'est utile](#mesurer-si-cest-utile)) |
 
 Toutes les clés, commentées : [`.env.example`](.env.example). Toutes les options de
 `reviewer.toml` : [`docs/reviewme.html`](docs/reviewme.html). Limites connues :
@@ -368,6 +527,14 @@ uv sync --group dev
 uv run pytest -q
 uv run ruff check .
 ```
+
+Pour juger le tableau de bord avant qu'une équipe ait des données, `reviewme demo-data
+--out DOSSIER [--seed N] [--days 90] [--language fr] [--now AAAA-MM-JJ]` écrit un registre
+synthétique réaliste (environ 70 PR relues et 40 non relues sur 90 jours, deux ans
+d'historique sur trois ères, logins fictifs `*-demo`) dans `DOSSIER/ledger` et en tire
+`DOSSIER/dashboard-demo-<langue>.html`, via un vrai `project.toml`. Même graine et même
+date donnent les mêmes fichiers. Ne jamais le pointer sur un vrai dossier de registre : il
+remplace `DOSSIER/ledger`.
 
 ## Contribuer et sécurité
 
