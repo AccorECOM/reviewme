@@ -32,7 +32,7 @@ from .projects import (
     select_reviewers,
 )
 from .reconciler import PreparedReview, load_pr_context, post_all, prepare
-from .reviewer import UsageLimitError
+from .reviewer import UsageLimitError, configured_model
 from .reviewer import run_review as run_reviewer
 from .scrub import scrub_text
 from .state import is_reviewed, mark_error, mark_reviewed
@@ -108,6 +108,9 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
 
     result = run_reviewer(pr_number, title, diff, config, spec=spec, extra_context=extra)
     result.metadata["context_files"] = sources
+    # What the config asked for, next to what answered (`model_reported`): a gateway alias
+    # only means something once both are side by side, on the PR and in the ledger.
+    result.metadata["model_configured"] = configured_model(spec)
     if not spec.findings and result.findings:
         # Reviewer without findings (e.g. `conseil`): whatever it produced despite the
         # instruction is neither verified nor posted.
@@ -365,7 +368,8 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                     # Only an advice reviewer (`findings = false`) shows advice:
                     # elsewhere, it would duplicate it.
                     advice=not spec.findings and not config.baseline,
-                    language=spec.language)
+                    language=spec.language,
+                    show_model=project.show_model, show_score=project.show_score)
             for spec, result in outcomes
         ]
         # Ledger: each finding with its fate, posted or not (see `ledger.py`). After

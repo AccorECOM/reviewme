@@ -151,6 +151,8 @@ class ProjectConfig:
     reviewers: tuple[ReviewerSpec, ...] = field(default_factory=tuple)
     simple: bool = False                   # True = simple mode's virtual project
     language: str = "en"                   # language of comments and posted texts
+    show_model: bool = False               # `[review] show_model`: model line on comments
+    show_score: bool = False               # `[review] show_score`: score on each finding
     ledger_include_text: bool = False      # `[ledger] include_text` from project.toml: does
                                            # the ledger keep the text of the comments?
     # `[stats]` from project.toml: what the dashboard shows and how. Tuples, not lists or
@@ -364,10 +366,32 @@ def _project_settings(name: str, settings: dict) -> dict:
             or os.environ.get("REVIEWME_LANGUAGE"))
     except ValueError as e:
         raise ProjectConfigError(f"project '{name}': `[review] language`: {e}") from e
+    review = settings.get("review", {}) or {}
     ledger = settings.get("ledger", {}) or {}
     return {"language": language,
+            "show_model": _review_flag(review, "show_model", name),
+            "show_score": _review_flag(review, "show_score", name),
             "ledger_include_text": bool(ledger.get("include_text", False)),
             **_load_stats(settings.get("stats"), name)}
+
+
+def _review_flag(review: dict, key: str, project_name: str) -> bool:
+    """`[review] <key>` as a strict boolean, else `REVIEWME_<KEY>`, else off.
+
+    Strict because a quoted `"false"` is truthy in Python: the comments would carry a line
+    the project turned off, with nothing in the logs to say why.
+    """
+    if key in review:
+        value = review[key]
+        if not isinstance(value, bool):
+            raise ProjectConfigError(f"project '{project_name}': `[review] {key}` must be "
+                                     f"true or false, not {value!r}")
+        return value
+    return _env_flag(f"REVIEWME_{key.upper()}")
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def load_project_settings(name: str, base_dir: Path | None = None) -> ProjectConfig:
@@ -674,7 +698,9 @@ def _simple_project(config: Config) -> ProjectConfig:
         language=normalize_language(os.environ.get("REVIEWME_LANGUAGE")),
     )
     return ProjectConfig(name="(simple mode)", directory=None, reviewers=(spec,), simple=True,
-                         language=spec.language)
+                         language=spec.language,
+                         show_model=_env_flag("REVIEWME_SHOW_MODEL"),
+                         show_score=_env_flag("REVIEWME_SHOW_SCORE"))
 
 
 def resolve_project(config: Config) -> ProjectConfig:

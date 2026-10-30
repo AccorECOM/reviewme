@@ -230,6 +230,29 @@ def pick_model(spec: ReviewerSpec) -> str:
     return spec.model or os.environ.get("CLAUDE_MODEL", "")
 
 
+def configured_model(spec: ReviewerSpec) -> str:
+    """The model name THIS deployment asked for, as written in its config, or "".
+
+    What `pick_model` passes to the CLI, else `ANTHROPIC_MODEL`, the variable the CLI
+    itself falls back on. It can be an alias only a gateway knows ("SuperLLM"): shown next
+    to the model that answered (`main_model`), it says what the alias pointed to.
+    """
+    return pick_model(spec) or os.environ.get("ANTHROPIC_MODEL", "")
+
+
+def main_model(model_usage: dict | None) -> str:
+    """The model that did most of the work in a CLI envelope's `modelUsage`, or "".
+
+    The CLI can call a small model on the side (titles, summaries of long tool outputs):
+    the review is the one that cost the most, then the one that wrote the most.
+    """
+    def weight(item):
+        usage = item[1] if isinstance(item[1], dict) else {}
+        return (usage.get("costUSD") or 0, usage.get("outputTokens") or 0)
+    ranked = sorted((model_usage or {}).items(), key=weight, reverse=True)
+    return ranked[0][0] if ranked else ""
+
+
 def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: int,
                model: str = "", budget: float = 0.0, label: str = "",
                timeout: int = _TIMEOUT_S, reviewer_tools: bool = True,
@@ -307,6 +330,7 @@ def invoke_cli(prompt: str, config: Config, spec: ReviewerSpec, *, max_turns: in
             # than what was requested).
             metadata = {
                 "model": ", ".join((data.get("modelUsage") or {}).keys()) or "?",
+                "model_reported": main_model(data.get("modelUsage")),
                 "cost_usd": data.get("total_cost_usd", 0),
                 "duration_ms": data.get("duration_ms", 0),
                 "total_turns": data.get("num_turns", 0),
