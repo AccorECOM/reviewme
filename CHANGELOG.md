@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- `[review] show_model` (default `false`): each comment names the model the config asked
+  for (possibly a gateway alias) and the one the API answered with.
+- `[review] show_score` (default `false`): each finding shows its score (the reviewer's
+  confidence, plus the verifier's when it confirmed it); the README explains it.
+- Ledger: `model_configured` and `model_reported`.
+
 ## 1.4.0
 
 - Statistics dashboard built from the ledger (`reviewme/dashboard/`): one self-contained
