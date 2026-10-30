@@ -35,13 +35,14 @@ wrote them; it reads none of the text fields, except the recurring-miss texts of
 | `trigger` | What started the run: `REVIEWME_TRIGGER` of the deployment, a free string. Documented values: `pr_build` (CI on a PR event), `manual`, `schedule`, `watch` (set by `reviewme watch` unless the deployment set its own). `unknown` when not set; absent on rows written before 1.4.0 (read as `unknown`) |
 | `reviewer` | Reviewer (`tech`, `architect`…) |
 | `model` | Model that **actually** answered (read from the CLI envelope) |
+| `model_configured` | Model name the config asked for: the reviewer's `model`, else `CLAUDE_MODEL`, else `ANTHROPIC_MODEL`; may be a gateway alias. Empty = the CLI default. Absent before 1.5.0 |
 | `engine_commit` | Engine commit |
 | `config_hash` | Fingerprint of the settings; details in `config-snapshot/<hash>/` |
 | `fingerprint` | Fingerprint of the line (`sha1(path + normalized content)[:10]`), identical to the posted marker. Empty if the line is not in the diff |
 | `path`, `line` | Location, new-file side, after re-anchoring on the diff |
 | `severity_raw` | Severity written by the model, before normalization |
 | `severity` | `BLOCKER`, `IMPORTANT` or `MINOR` |
-| `confidence` | Confidence declared by the model (0-100) |
+| `confidence` | Confidence declared by the model (0-100): the "score" shown on the PR with `[review] show_score` |
 | `rule_id` | Rule identifier given by the model (may be empty) |
 | `has_evidence` | The model cited a proof (`evidence`) |
 | `verification` | `{status, confidence}`: `confirmed`, `refuted` or `skipped` (no verification pass) |
@@ -53,10 +54,11 @@ wrote them; it reads none of the text fields, except the recurring-miss texts of
 ## `runs.jsonl` — one line per reviewer and per run
 
 `run_id`, `ts`, `repo`, `pr`, `head_sha`, `base_sha`, `variant`, `dry_run`, `status`,
-`trigger`, `reviewer`, `model`, `engine_commit`, `config_hash`, plus:
+`trigger`, `reviewer`, `model`, `model_configured`, `engine_commit`, `config_hash`, plus:
 
 | Field | Meaning |
 |---|---|
+| `model_reported` | The model that did most of the work (highest cost in the envelope's `modelUsage`), the "answered" name shown with `[review] show_model`. Absent before 1.5.0 |
 | `parsed_ok` | The answer complied with the output contract |
 | `num_turns`, `max_turns` | Turns used and cap |
 | `subtype`, `is_error` | CLI ending: `success`, `error_max_turns`… |

@@ -116,7 +116,8 @@ def _guard(text: str, logger: logging.Logger, pr_number: int) -> str:
     return text
 
 
-def _comment_body(finding, marker: str, prefix: str = "", lang: str = "en") -> str:
+def _comment_body(finding, marker: str, prefix: str = "", lang: str = "en", *,
+                  show_score: bool = False, model_line: str = "") -> str:
     label = _SEV_LABEL.get(finding.severity, "[MINOR]")
     head = f"{prefix} " if prefix else ""
     lines = [f"**{head}{label}** {_scrub(finding.message)}"]
@@ -127,8 +128,63 @@ def _comment_body(finding, marker: str, prefix: str = "", lang: str = "en") -> s
     if (finding.verification or {}).get("status") == "error":
         # Verification failed: the comment still goes through, but the reader knows it.
         lines.append("\n" + t("unverified_note", lang))
+    meta = [p for p in (_score_text(finding, lang) if show_score else "", model_line) if p]
+    if meta:
+        lines.append(f"\n<sub>{' · '.join(meta)}</sub>")
     lines.append(f"\n{marker}")
     return "\n".join(lines)
+
+
+def _clean_model(name) -> str:
+    """A model name fit for a Markdown code span: one line, no backtick, bounded."""
+    text = _scrub(str(name or "")).replace("`", "").split("\n")[0].strip()
+    return text[:80]
+
+
+def model_line(metadata: dict, lang: str = "en") -> str:
+    """`[review] show_model`: the model the config named, and the one that answered.
+
+    Both, because an in-house gateway can expose an alias ("SuperLLM") that routes to a
+    real model: the configured name alone says nothing, the answered one alone does not
+    tell which setting produced it. "Answered" is what the CLI envelope reports
+    (`model_reported`), i.e. what the API response declared.
+    """
+    configured = _clean_model(metadata.get("model_configured"))
+    reported = metadata.get("model_reported")
+    if reported is None:
+        # Envelope without `model_reported` (simulated run, older result): `model` lists
+        # every model the call used, "?" when unknown.
+        reported = "" if metadata.get("model") in (None, "", "?") else metadata["model"]
+    reported = _clean_model(reported)
+    if configured and configured == reported:
+        return t("model_same", lang, model=f"`{configured}`")
+    return t("model_line", lang,
+             configured=f"`{configured}`" if configured else t("model_default", lang),
+             reported=f"`{reported}`" if reported else t("model_unknown", lang))
+
+
+def _score_text(finding, lang: str = "en") -> str:
+    """`[review] show_score`: the confidence the reviewer gave (0-100), then the
+    verifier's when it confirmed the finding. The same numbers as the ledger's
+    `confidence` and `verification.confidence`, so what a reader sees on the PR can be
+    matched with the dashboard."""
+    parts = [t("score", lang, score=finding.confidence)]
+    v = finding.verification or {}
+    if v.get("status") == "confirmed" and v.get("confidence") is not None:
+        parts.append(t("score_verified", lang, score=v["confidence"]))
+    return " · ".join(parts)
+
+
+def _listed_score(finding, show_score: bool, lang: str) -> str:
+    return f" <sub>{_score_text(finding, lang)}</sub>" if show_score else ""
+
+
+def _with_model_line(body: str, line: str) -> str:
+    """Puts the model line right under the section title (`## …`)."""
+    if not line or not body:
+        return body
+    title, _, rest = body.partition("\n")
+    return f"{title}\n<sub>{line}</sub>" + (f"\n{rest}" if rest else "")
 
 
 def _footer(head_sha: str, lang: str = "en") -> str:
@@ -139,7 +195,8 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
                   title: str = "", *, signed: bool = True,
                   retained: list | None = None, unverified: int = 0,
                   minor: list | None = None, preexisting: list | None = None,
-                  advice: list | None = None, lang: str = "en") -> str:
+                  advice: list | None = None, lang: str = "en",
+                  show_score: bool = False) -> str:
     """Summary body. `retained`: listed findings (global mode, where they have no
     inline comment). `unverified`: findings discarded by verification.
 
@@ -159,7 +216,7 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
         parts.append("")
         for f in retained:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} "
-                         f"{_scrub(f.message)}")
+                         f"{_scrub(f.message)}{_listed_score(f, show_score, lang)}")
     if advice:
         # Not defects: what a human must validate themselves on THIS PR.
         parts.append("\n" + t("advice_header", lang))
@@ -169,16 +226,18 @@ def _summary_body(result: ReviewResult, out_of_diff: list, head_sha: str,
     if minor:
         parts.append("\n" + t("minor_header", lang))
         for f in minor:
-            parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_scrub(f.message)}")
+            parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_scrub(f.message)}"
+                         f"{_listed_score(f, show_score, lang)}")
     if preexisting:
         parts.append("\n" + t("moved_header", lang))
         for f in preexisting:
             parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} "
-                         f"{_scrub(f.message)}")
+                         f"{_scrub(f.message)}{_listed_score(f, show_score, lang)}")
     if out_of_diff:
         parts.append("\n" + t("out_of_diff_header", lang))
         for f in out_of_diff:
-            parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} {_scrub(f.message)}")
+            parts.append(f"- `{_scrub(f.path)}:{f.line}` — {_SEV_LABEL.get(f.severity, '[MINOR]')} "
+                         f"{_scrub(f.message)}{_listed_score(f, show_score, lang)}")
     if signed:
         parts.append(_footer(head_sha, lang))
     return "\n".join(parts)
@@ -251,8 +310,13 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             logger: logging.Logger, reviewer_id: str, *,
             output_mode: str = "inline", prefix: str = "",
             silent_when_clean: bool = False, advice: bool = False,
-            language: str = "en") -> PreparedReview:
-    """Computes what should be posted for ONE reviewer. No network side effect."""
+            language: str = "en", show_model: bool = False,
+            show_score: bool = False) -> PreparedReview:
+    """Computes what should be posted for ONE reviewer. No network side effect.
+
+    `show_model` / `show_score`: `[review]` switches of `project.toml`, see `model_line`
+    and `_score_text`.
+    """
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]
     counts = {"posted": 0, "replied": 0, "deduped": 0, "out_of_diff": 0,
@@ -261,6 +325,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
     lang = language
     prep = PreparedReview(reviewer_id=reviewer_id, output_mode=output_mode, counts=counts,
                           findings=list(result.findings), language=lang)
+    modele = model_line(result.metadata or {}, lang) if show_model else ""
 
     # --- CLI failure (auth, gateway, crash): nothing to post. The raw text is the
     # error message, and it may carry fragments of credentials (key suffix, key hash).
@@ -278,7 +343,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
                        pr_number, reviewer_id)
         counts["fallback"] = True
         prep.global_body = _guard(
-            f"## {t('fallback_title', lang, reviewer=reviewer_id)}\n\n{_scrub(result.raw)}\n\n"
+            _with_model_line(f"## {t('fallback_title', lang, reviewer=reviewer_id)}", modele)
+            + f"\n\n{_scrub(result.raw)}\n\n"
             f"---\n{t('signature', lang)} · commit `{head_sha[:8]}`", logger, pr_number)
         return prep
 
@@ -357,12 +423,15 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
         result, out_of_diff, head_sha, title, signed=False,
         retained=inline if output_mode == "global" else None,
         unverified=counts["dropped_unverified"], minor=minor, preexisting=preexisting,
-        advice=conseils, lang=lang),
+        advice=conseils, lang=lang, show_score=show_score),
         logger, pr_number)
     # An inline reviewer whose findings say it all leaves `summary` empty (output
     # contract): its section would be a bare title above the other reviewers' text.
     if output_mode != "global" and prep.summary == f"## {title}":
         prep.summary = ""
+    # Under the title, so it names the model of THIS reviewer's section: the review body
+    # joins the sections of every reviewer, each may run on another model.
+    prep.summary = _with_model_line(prep.summary, modele)
 
     # --- `global` mode: a single comment, updated from commit to commit ---
     if output_mode == "global":
@@ -395,7 +464,8 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             f.fate = "posted"
             prep.batch.append({
                 "path": f.path, "line": f.line, "side": "RIGHT",
-                "body": _guard(_comment_body(f, marker, prefix, lang), logger, pr_number),
+                "body": _guard(_comment_body(f, marker, prefix, lang, show_score=show_score,
+                                             model_line=modele), logger, pr_number),
                 "_severity": f.severity, "_confidence": f.confidence, "_reviewer": reviewer_id,
                 "_finding": f,
             })

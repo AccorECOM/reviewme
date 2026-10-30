@@ -68,6 +68,21 @@ _TEXTS: dict[str, dict[str, str]] = {
         "fr": "Ce point n'apparaît plus sur `{sha}` — corrigé ou disparu du diff. {signature}",
     },
     "commit": {"en": "commit", "fr": "commit"},
+    # `[review] show_model`: the name the config asked for, then the one the API answered
+    # with. They differ behind a gateway alias, hence both.
+    "model_line": {
+        "en": "model: {configured} (configured) → {reported} (answered)",
+        "fr": "modèle : {configured} (configuré) → {reported} (a répondu)",
+    },
+    "model_same": {
+        "en": "model: {model} (configured = answered)",
+        "fr": "modèle : {model} (configuré = a répondu)",
+    },
+    "model_default": {"en": "CLI default", "fr": "défaut du CLI"},
+    "model_unknown": {"en": "unknown", "fr": "inconnu"},
+    # `[review] show_score`: the reviewer's own confidence, then the verifier's.
+    "score": {"en": "score {score}/100", "fr": "score {score}/100"},
+    "score_verified": {"en": "verification {score}/100", "fr": "vérification {score}/100"},
 }
 
 #: Signatures of every language: replies of the bot are recognised by them, whatever the

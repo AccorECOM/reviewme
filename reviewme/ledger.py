@@ -193,6 +193,7 @@ def finding_rows(base: dict, reviewer: str, result, findings: list, *,
             **base,
             "reviewer": reviewer,
             "model": result.metadata.get("model", "?"),
+            "model_configured": result.metadata.get("model_configured", ""),
             "fingerprint": fingerprint_hash(f.path, f.line_content) if f.line_content else "",
             "path": f.path,
             "line": f.line,
@@ -227,6 +228,10 @@ def run_row(base: dict, reviewer: str, result, *, threshold: int, diff_files: in
         **base,
         "reviewer": reviewer,
         "model": m.get("model", "?"),
+        # The name the config asked for (may be a gateway alias) and the model that did
+        # most of the work: `model` lists every model the call used.
+        "model_configured": m.get("model_configured", ""),
+        "model_reported": m.get("model_reported", ""),
         "parsed_ok": result.parsed_ok,
         "num_turns": m.get("total_turns", 0),
         "max_turns": m.get("max_turns"),
