@@ -12,7 +12,8 @@ Modules:
   history.py       PR discussion threads, given to the agent before it judges
   stats.py         aggregated counters, no content (portable via a CI cache)
   feedback.py      developer replies -> attributed rules, to be reviewed
-  report.py        standalone HTML stats report
+  report.py        legacy HTML report from stats.json (see dashboard/)
+  dashboard/       ledger-driven HTML dashboard, one page per section
   fake.py          simulated mode: the whole pipeline, without calling the LLM
   context/         optional external context providers (jira.py)
   github_auth.py   PAT or GitHub App (JWT RS256 -> renewed installation token)
@@ -25,4 +26,4 @@ Modules:
   web/             dashboard (read-only, hardened)
 """
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
