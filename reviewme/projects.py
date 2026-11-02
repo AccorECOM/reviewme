@@ -153,6 +153,7 @@ class ProjectConfig:
     language: str = "en"                   # language of comments and posted texts
     show_model: bool = False               # `[review] show_model`: model line on comments
     show_score: bool = False               # `[review] show_score`: score on each finding
+    clean_note: bool = False               # `[review] clean_note`: say so when nothing to report
     ledger_include_text: bool = False      # `[ledger] include_text` from project.toml: does
                                            # the ledger keep the text of the comments?
     # `[stats]` from project.toml: what the dashboard shows and how. Tuples, not lists or
@@ -371,6 +372,7 @@ def _project_settings(name: str, settings: dict) -> dict:
     return {"language": language,
             "show_model": _review_flag(review, "show_model", name),
             "show_score": _review_flag(review, "show_score", name),
+            "clean_note": _review_flag(review, "clean_note", name),
             "ledger_include_text": bool(ledger.get("include_text", False)),
             **_load_stats(settings.get("stats"), name)}
 
@@ -700,7 +702,8 @@ def _simple_project(config: Config) -> ProjectConfig:
     return ProjectConfig(name="(simple mode)", directory=None, reviewers=(spec,), simple=True,
                          language=spec.language,
                          show_model=_env_flag("REVIEWME_SHOW_MODEL"),
-                         show_score=_env_flag("REVIEWME_SHOW_SCORE"))
+                         show_score=_env_flag("REVIEWME_SHOW_SCORE"),
+                         clean_note=_env_flag("REVIEWME_CLEAN_NOTE"))
 
 
 def resolve_project(config: Config) -> ProjectConfig:

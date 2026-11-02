@@ -381,7 +381,13 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         # nightly job's work (`reviewme enrich`).
         from .ledger import record as enregistrer_registre
         try:
-            counts = post_all(pr, config, gh, prepared, logger)
+            # `[review] clean_note` only when the silence is earned: every selected
+            # reviewer came back (none crashed) with an answer that could be read.
+            complete = (len(outcomes) == len(selected)
+                        and all(r.parsed_ok for _, r in outcomes))
+            counts = post_all(pr, config, gh, prepared, logger,
+                              clean_note=[s.id for s, _ in outcomes]
+                              if project.clean_note and complete else None)
         except Exception:
             enregistrer_registre(pr, config, project, prepared, outcomes, diff, logger,
                                  status="post_failed")

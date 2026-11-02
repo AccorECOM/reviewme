@@ -271,7 +271,7 @@ Pour le laisser tourner : un multiplexeur de terminal, ou `--once` depuis `cron`
 | hors des lignes du diff | résumé | GitHub refuse un commentaire hors diff |
 | non confirmée par la vérification | nulle part (registre) | un faux positif coûte la confiance de l'équipe |
 | **💡 Conseil pour la relecture** (relecteur `advisor`) : un point qu'un humain doit valider lui-même (ordre d'appels modifié, fichier rangé hors de son dossier habituel…) | un commentaire | seulement s'il est applicable, ancré dans des fichiers de la PR ; 3 au plus |
-| PR propre | rien | le silence vaut mieux qu'un « RAS » |
+| PR propre | rien, ou une courte note avec `[review] clean_note = true` | le silence vaut mieux qu'un « RAS » ; la note dit seulement que la revue a tourné |
 
 La langue des remarques postées et des titres du bot se règle par projet dans
 `project.toml` : `[review] language = "fr"` (défaut `en`).
@@ -328,6 +328,22 @@ le seuil.
 
 Le mode simple (sans projet) lit `REVIEWME_SHOW_MODEL` et `REVIEWME_SHOW_SCORE`
 (`1`/`0`) ; le `project.toml` d'un projet l'emporte sur eux.
+
+### Note sur une PR propre
+
+Par défaut, une PR propre ne reçoit aucun commentaire, ce qu'on ne distingue pas d'un bot
+qui n'a pas tourné. `[review] clean_note = true` (mode simple : `REVIEWME_CLEAN_NOTE=1`)
+poste à la place un court commentaire, quand chaque relecteur sélectionné est allé au bout
+avec une réponse lisible et qu'aucun n'a rien à poster :
+
+```
+✅ Revue terminée sur `abcdef12` : aucune remarque. Relecteurs : `architect`, `tech`.
+```
+
+C'est un seul commentaire, mis à jour de commit en commit (il prend la place du
+commentaire de synthèse, et la synthèse la reprend sur un commit avec remarques). Il ne
+compte pas comme une remarque postée. Un relecteur en échec ou hors contrat, et pas de
+note : le silence n'est pas mérité.
 
 Le bot ne poste que des commentaires : jamais d'approbation ni de demande de changement.
 
@@ -561,13 +577,14 @@ Le diff, le ticket et les commentaires sont écrits par des tiers : ce sont des
 | `JIRA_BUG_TYPES` | `history --jira` : noms de types de ticket comptés comme bugs (défaut `Bug`) |
 | `REVIEWME_FAKE`, `REVIEWME_DEBUG` | sans appel au modèle ; journal détaillé |
 | `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | passerelle LLM, modèle |
-| `REVIEWME_SHOW_MODEL`, `REVIEWME_SHOW_SCORE` | mode simple : `[review] show_model` / `show_score` |
+| `REVIEWME_SHOW_MODEL`, `REVIEWME_SHOW_SCORE`, `REVIEWME_CLEAN_NOTE` | mode simple : `[review] show_model` / `show_score` / `clean_note` |
 | `POLL_INTERVAL`, `REVIEWME_SKIP_LABEL` | watch : intervalle par défaut, label d'exclusion (défaut `no-ai-review`) |
 
 | Clé du `project.toml` | Rôle |
 |---|---|
 | `[review] language` | langue des remarques postées et des titres du bot (défaut `en`, ex. `"fr"`) |
 | `[review] show_model`, `[review] show_score` | modèle (configuré et ayant répondu) et score sous chaque remarque (défaut `false`, voir [Modèle et score sur les commentaires](#modèle-et-score-sur-les-commentaires)) |
+| `[review] clean_note` | un court commentaire « revue terminée, aucune remarque » sur une PR propre (défaut `false`, voir [Note sur une PR propre](#note-sur-une-pr-propre)) |
 | `[ledger] include_text` | garder le texte des remarques et des réponses dans le registre (défaut `false`) |
 | `[stats]` | sections, noms, fenêtre, période, `bot_since`, `[stats.roi]` et `[stats.triage]` du tableau de bord (voir [Mesurer si c'est utile](#mesurer-si-cest-utile)) |
 

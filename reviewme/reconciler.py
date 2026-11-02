@@ -559,8 +559,14 @@ def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: l
 
 
 def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[PreparedReview],
-             logger: logging.Logger) -> dict:
-    """ONLY GitHub write point. Applies the comment cap then posts."""
+             logger: logging.Logger, *, clean_note: list[str] | None = None) -> dict:
+    """ONLY GitHub write point. Applies the comment cap then posts.
+
+    `clean_note`: the ids of the reviewers when `[review] clean_note` is on AND every
+    selected reviewer ran to the end with a readable answer (the caller checks it). If
+    nothing at all is posted, one short comment then says the review is complete with no
+    remarks — so an empty PR reads as "reviewed, nothing found", not "did it run?".
+    """
     pr_number = pr["number"]
     head_sha = pr["head"]["sha"]
     # `posted` stays the total (compatibility), but we distinguish the kind: without this, a
@@ -592,6 +598,13 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
                    else _footer(head_sha, lang).removeprefix("\n---\n"))
     # Comments to deliver through the summary only (out-of-diff, minor, pre-existing).
     out_of_diff_only = bool(speaking)
+    # Nothing to post at all, from any reviewer: the `clean_note` case.
+    clean = bool(clean_note) and not batch and not summary_body and not globals_
+    clean_body = (t("clean_note", lang, sha=head_sha[:8],
+                    reviewers=", ".join(f"`{r}`" for r in clean_note))
+                  + _footer(head_sha, lang)) if clean else ""
+    # Not a remark: `posted` and the stats stay at 0, this only says the note went out.
+    totals["clean_note"] = clean
 
     if config.dry_run:
         # In dry-run, SHOW what would be posted: that is the whole point of the mode,
@@ -608,6 +621,8 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
                 logger.info("  [%s] global comment:\n%s", p.reviewer_id, extrait[:1500])
             elif p.summary and p.output_mode != "global":
                 logger.info("  [%s] summary:\n%s", p.reviewer_id, p.summary[:1000])
+        if clean:
+            logger.info("  clean note:\n%s", clean_body)
         totals["posted"] = totals["posted_inline"] = len(batch)
         totals["posted_global"] = len(globals_)
         return totals
@@ -633,13 +648,16 @@ def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[Prepared
                 totals["fallback"] = True
             else:
                 raise
-    elif summary_body and out_of_diff_only:
+    elif (summary_body and out_of_diff_only) or clean:
         # No inline, but comments to deliver through the summary only (out-of-diff,
         # minor, pre-existing). ONE comment, updated from commit to commit:
         # posting one on every push would drown the conversation.
-        # NB: a completely clean PR does NOT get a comment.
+        # A completely clean PR gets a comment only with `[review] clean_note`. It shares
+        # the summary's marker: a summary left by an earlier commit is replaced by the
+        # clean note instead of staying in place with remarks that no longer hold, and
+        # the next commit with remarks turns it back into a summary.
         marker = summary_fingerprint("resume")
-        body = f"{signed_body}\n\n{marker}"
+        body = f"{clean_body if clean else signed_body}\n\n{marker}"
         existing = next((c for c in gh.list_issue_comments(pr_number)
                          if marker_key(c.get("body", "")) == marker_key(marker)), None)
         if existing:
