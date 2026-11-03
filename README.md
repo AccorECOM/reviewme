@@ -268,7 +268,7 @@ To keep it running, use a terminal multiplexer, or `--once` from `cron`/`launchd
 | outside the diff lines | summary | GitHub rejects comments outside the diff |
 | not confirmed by verification | nowhere (ledger) | a false positive costs the team's trust |
 | **💡 Review tip** (`advisor` reviewer): something a human must check themselves (call order changed, file placed outside its usual folder…) | one comment | only when it applies, anchored in files of the PR; 3 at most |
-| clean PR | nothing | silence beats a "LGTM" |
+| clean PR | nothing, or one short note with `[review] clean_note = true` | silence beats a "LGTM"; the note only says the review ran |
 
 The language of the posted remarks and of the bot's headings is set per project in
 `project.toml`: `[review] language = "fr"` (default `en`).
@@ -323,6 +323,22 @@ whether 90s are really more often right than 80s, and where to set the threshold
 
 The simple mode (no project) reads `REVIEWME_SHOW_MODEL` and `REVIEWME_SHOW_SCORE`
 (`1`/`0`); a project's `project.toml` wins over them.
+
+### Clean PR note
+
+By default a clean PR gets no comment, which cannot be told apart from a bot that did
+not run. `[review] clean_note = true` (simple mode: `REVIEWME_CLEAN_NOTE=1`) posts one
+short comment instead, when every selected reviewer ran to the end with a readable
+answer and none of them has anything to post:
+
+```
+✅ Review complete on `abcdef12`: no remarks. Reviewers: `architect`, `tech`.
+```
+
+It is a single comment, updated from commit to commit (it takes the place of the
+summary comment, and the summary takes it back on a commit with remarks). It is not
+counted as a posted remark. A reviewer that crashed or answered off-contract means no
+note: the silence was not earned.
 
 The bot only posts comments: never an approval or a change request.
 
@@ -549,13 +565,14 @@ never instructions.
 | `JIRA_BUG_TYPES` | `history --jira`: issue type names counted as bugs (default `Bug`) |
 | `REVIEWME_FAKE`, `REVIEWME_DEBUG` | no model call; verbose log |
 | `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | LLM gateway, model |
-| `REVIEWME_SHOW_MODEL`, `REVIEWME_SHOW_SCORE` | simple mode: `[review] show_model` / `show_score` |
+| `REVIEWME_SHOW_MODEL`, `REVIEWME_SHOW_SCORE`, `REVIEWME_CLEAN_NOTE` | simple mode: `[review] show_model` / `show_score` / `clean_note` |
 | `POLL_INTERVAL`, `REVIEWME_SKIP_LABEL` | watch: default interval, opt-out label (default `no-ai-review`) |
 
 | `project.toml` key | Purpose |
 |---|---|
 | `[review] language` | language of the posted remarks and of the bot's headings (default `en`, e.g. `"fr"`) |
 | `[review] show_model`, `[review] show_score` | model (configured and answered) and score under each remark (default `false`, see [Model and score on the comments](#model-and-score-on-the-comments)) |
+| `[review] clean_note` | one short "review complete, no remarks" comment on a clean PR (default `false`, see [Clean PR note](#clean-pr-note)) |
 | `[ledger] include_text` | keep finding and reply texts in the ledger (default `false`) |
 | `[stats]` | dashboard sections, names, window, period, `bot_since`, `[stats.roi]`, `[stats.triage]` (see [Measuring whether it helps](#measuring-whether-it-helps)) |
 

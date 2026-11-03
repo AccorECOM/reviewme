@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0
+
+- `[review] clean_note` (default `false`): one short "review complete, no remarks"
+  comment when every reviewer ran and none had anything to post.
+- Refused tool calls are logged with their command (`Bash: git diff … | head`), and the
+  review and verification prompts state the Bash limits and name the base branch, so the
+  agent stops trying commands the allowlist refuses.
+
 ## 1.5.0
 
 - `[review] show_model` (default `false`): each comment names the model the config asked

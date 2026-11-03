@@ -68,6 +68,11 @@ _TEXTS: dict[str, dict[str, str]] = {
         "fr": "Ce point n'apparaît plus sur `{sha}` — corrigé ou disparu du diff. {signature}",
     },
     "commit": {"en": "commit", "fr": "commit"},
+    # `[review] clean_note`: every reviewer ran to the end and none had anything to say.
+    "clean_note": {
+        "en": "✅ Review complete on `{sha}`: no remarks. Reviewers: {reviewers}.",
+        "fr": "✅ Revue terminée sur `{sha}` : aucune remarque. Relecteurs : {reviewers}.",
+    },
     # `[review] show_model`: the name the config asked for, then the one the API answered
     # with. They differ behind a gateway alias, hence both.
     "model_line": {

@@ -59,7 +59,7 @@ def _gather_context(pr: dict, config: Config, logger: logging.Logger) -> tuple[d
 def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
              config: Config, context: dict, logger: logging.Logger,
              historique: str = "", changed_paths: list[str] | None = None,
-             reader=None):
+             reader=None, base_ref: str | None = None):
     """Runs one reviewer (deterministic precheck, then LLM). Returns (spec, result)."""
     # Plugins declared by the reviewer: skills and agents it needs (installed once,
     # then reused). A failure here only affects THIS reviewer.
@@ -93,6 +93,12 @@ def _run_one(spec: ReviewerSpec, pr_number: int, title: str, diff: str,
                                   skip=spec.context_read, reader=reader)
         if auto:
             blocks.append(auto)
+
+    # Named, so the agent does not spend turns (and refused commands) looking for it.
+    from .reviewer import base_branch_block
+    base_block = base_branch_block(base_ref)
+    if base_block:
+        blocks.append(base_block)
 
     extra = "\n\n".join(blocks)
 
@@ -326,11 +332,11 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         outcomes: list[tuple[ReviewerSpec, object]] = []
         if len(selected) == 1:
             outcomes.append(_run_one(selected[0], pr_number, title, diff, config, context,
-                                     logger, historique, changed_paths, reader))
+                                     logger, historique, changed_paths, reader, base_ref))
         else:
             with ThreadPoolExecutor(max_workers=min(len(selected), 4)) as pool:
                 futures = [pool.submit(_run_one, s, pr_number, title, diff, config, context,
-                                       logger, historique, changed_paths, reader)
+                                       logger, historique, changed_paths, reader, base_ref)
                            for s in selected]
                 for fut in futures:
                     try:
@@ -381,7 +387,13 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         # nightly job's work (`reviewme enrich`).
         from .ledger import record as enregistrer_registre
         try:
-            counts = post_all(pr, config, gh, prepared, logger)
+            # `[review] clean_note` only when the silence is earned: every selected
+            # reviewer came back (none crashed) with an answer that could be read.
+            complete = (len(outcomes) == len(selected)
+                        and all(r.parsed_ok for _, r in outcomes))
+            counts = post_all(pr, config, gh, prepared, logger,
+                              clean_note=[s.id for s, _ in outcomes]
+                              if project.clean_note and complete else None)
         except Exception:
             enregistrer_registre(pr, config, project, prepared, outcomes, diff, logger,
                                  status="post_failed")
