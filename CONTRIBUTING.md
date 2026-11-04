@@ -21,13 +21,21 @@ cp .env.example .env                       # GITHUB_TOKEN, GITHUB_REPO, REPO_PAT
 ## Check before the PR
 
 ```sh
-uv run pytest -q          # 179 tests, under 2 s, no network, no secret
+uv run pytest -q          # a few seconds, no network, no secret
 uv run ruff check .       # lint
 uv run reviewme review --repo owner/repo --pr 1 --dry-run   # prints what would be posted
 ```
 
 `REVIEWME_FAKE=1` skips the model and fabricates findings anchored on the diff, which is
 enough to exercise the whole pipeline.
+
+To judge the dashboard before a team has data, `reviewme demo-data --out DIR [--seed N]
+[--days 90] [--language fr] [--now YYYY-MM-DD]` writes a realistic synthetic ledger
+(about 70 reviewed and 40 unreviewed PRs over 90 days, two years of history across three
+eras, fictional `*-demo` logins) into `DIR/ledger` and builds
+`DIR/dashboard-demo-<language>.html` from it, through a real `project.toml`. The same seed
+and date give the same files. Never point it at a real ledger folder: it replaces
+`DIR/ledger`.
 
 ## What must not change without a discussion
 
@@ -42,5 +50,8 @@ These are the engine's security invariants (see `SECURITY.md`):
 ## Conventions
 
 - Commit messages: `add/update/fix/delete(scope) - Short description`.
-- Code, prompts, docs and tests are in English; `README.fr.md` mirrors `README.md`.
+- Code, prompts, docs and tests are in English; `README.fr.md` mirrors `README.md`, and
+  `docs/fr/` mirrors the pages of `docs/` (same file names).
+- Docs: `README.md` stays a short entry point; details go to a page of `docs/`, one topic
+  per page, kept short. A new setting is documented on its page and in `docs/reference.md`.
 - Python 3.13, managed with `uv`; `pyproject.toml` is the single source of settings.
