@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.1
+
+- Fix: the ledger now gets the `comment_id` of every posted inline finding. The ids were
+  read from `GET /pulls/{n}/reviews/{id}/comments`, which returns `line` and
+  `original_line` as null, so no finding matched its comment (the match key is
+  `(path, line, marker)`). Without `comment_id` a posted finding is not counted as judged
+  and `reviewme enrich` cannot attach reactions or replies: the dashboard showed 0 posted,
+  0 followed, 0 with a human answer. The comments are now read from `GET /pulls/{n}/comments`
+  (which carries the line) and filtered on `pull_request_review_id`.
+- A failure to link comment ids is now logged as a warning, with the number of findings
+  concerned, instead of an info line.
+- Findings posted before this fix keep an empty `comment_id`.
+
 ## 1.6.0
 
 - `[review] clean_note` (default `false`): one short "review complete, no remarks"
