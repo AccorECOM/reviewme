@@ -111,6 +111,22 @@ def test_cap_marks_capped_and_post_attaches_ids():
     assert findings[1].fate == "capped" and findings[1].comment_id is None
 
 
+def test_unlinked_comment_ids_are_reported_loudly(caplog):
+    """A posted finding whose comment cannot be found stays without `comment_id`, and says so."""
+    class _NoLineGH(_FakeGH):
+        def list_review_comments_of_review(self, pr_number, review_id):
+            return [{"id": 100 + i, "body": c["body"], "path": c["path"], "line": None,
+                     "original_line": None} for i, c in enumerate(self.posted)]
+
+    findings = [_f(10, 95)]
+    prep = prepare(PR, _config(dry_run=False), _ctx(), ReviewResult("COMMENT", "s", findings),
+                   LOGGER, "tech")
+    with caplog.at_level(logging.WARNING, logger=LOGGER.name):
+        post_all(PR, _config(dry_run=False), _NoLineGH(), [prep], LOGGER)
+    assert findings[0].fate == "posted" and findings[0].comment_id is None
+    assert any("could not be linked" in r.message for r in caplog.records)
+
+
 def test_parsing_counts_invalid_findings():
     r = parse_review_output(json.dumps({"summary": "s", "findings": [
         {"path": "a", "line": 1, "severity": "warning", "confidence": 80},

@@ -548,14 +548,19 @@ def _attach_comment_ids(gh: GitHubClient, pr_number: int, review: dict, batch: l
     try:
         commentaires = gh.list_review_comments_of_review(pr_number, review["id"])
     except Exception as e:
-        logger.info("PR #%s: ids of posted comments not re-read (%s) — incomplete ledger",
-                    pr_number, type(e).__name__)
+        logger.warning("PR #%s: ids of posted comments not re-read (%s) — incomplete ledger",
+                       pr_number, type(e).__name__)
         return
     for c in commentaires:
         f = par_cle.get((c.get("path"), c.get("line") or c.get("original_line"),
                          marker_key(c.get("body", ""))))
         if f is not None:
             f.comment_id = c.get("id")
+    sans_id = sum(1 for f in par_cle.values() if f.comment_id is None)
+    if sans_id:
+        logger.warning("PR #%s: %d of %d posted finding(s) could not be linked to a comment id"
+                       " — incomplete ledger (no reactions or replies can be tracked for them)",
+                       pr_number, sans_id, len(par_cle))
 
 
 def post_all(pr: dict, config: Config, gh: GitHubClient, prepared: list[PreparedReview],

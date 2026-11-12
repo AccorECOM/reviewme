@@ -157,22 +157,14 @@ class GitHubClient:
         return comments
 
     def list_review_comments_of_review(self, pr_number: int, review_id: int) -> list[dict]:
-        """Comments of ONE review (to link their ids to the posted findings)."""
-        comments: list[dict] = []
-        page = 1
-        while True:
-            resp = self._request(
-                "GET",
-                f"{API_BASE}/repos/{self._repo}/pulls/{pr_number}/reviews/{review_id}/comments",
-                params={"per_page": 100, "page": page},
-            )
-            resp.raise_for_status()
-            batch = resp.json()
-            if not batch:
-                break
-            comments.extend(batch)
-            page += 1
-        return comments
+        """Comments of ONE review (to link their ids to the posted findings).
+
+        Read from the PR's comment list and filtered on `pull_request_review_id`, NOT from
+        `/pulls/{n}/reviews/{id}/comments`: that endpoint returns `line` and `original_line`
+        as null (only `position`), so the findings could never be matched by line.
+        """
+        return [c for c in self.list_review_comments(pr_number)
+                if c.get("pull_request_review_id") == review_id]
 
     def list_issue_comments(self, pr_number: int) -> list[dict]:
         """The PR's global comments (issue comments), paginated.
