@@ -74,3 +74,28 @@ def test_prs_updated_since_stops_at_the_window(monkeypatch):
     calls.clear()
     assert len(gh.list_prs_updated_since("2026-10-15T00:00:00+00:00")) == 1
     assert len(calls) == 1
+
+
+def test_review_comments_of_review_come_from_the_pr_comment_list(monkeypatch):
+    """Regression: `/pulls/{n}/reviews/{id}/comments` returns `line: null`, so the findings
+    could not be matched and no `comment_id` reached the ledger. The comments are read from
+    `/pulls/{n}/comments` (which carries the line) and filtered on the review id."""
+    seen: list[str] = []
+    comments = [
+        {"id": 1, "pull_request_review_id": 10, "path": "a.kt", "line": 22},
+        {"id": 2, "pull_request_review_id": 11, "path": "b.kt", "line": 5},
+        {"id": 3, "pull_request_review_id": 10, "path": "c.kt", "line": 7},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        page = request.url.params.get("page")
+        return httpx.Response(200, json=comments if page == "1" else [])
+
+    config = Config(github_token="PAT", github_repo="o/r", confidence_threshold=50, dry_run=True)
+    monkeypatch.setattr("reviewme.github_auth.build_provider", lambda cfg: TokenProvider("PAT"))
+    gh = GitHubClient(config)
+    gh._client = httpx.Client(transport=httpx.MockTransport(handler), headers=config.api_headers)
+    got = gh.list_review_comments_of_review(7, 10)
+    assert [c["id"] for c in got] == [1, 3] and all(c["line"] for c in got)
+    assert all(p == "/repos/o/r/pulls/7/comments" for p in seen)
