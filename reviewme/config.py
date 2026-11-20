@@ -59,6 +59,7 @@ class Config:
                                           # from before measurement, in dry-run, to compare
     inline_min_severity: str = "IMPORTANT"  # minimum severity posted INLINE; below it,
                                             # the comment goes into the summary. MINOR = all inline
+    alert_webhook: str = ""               # chat webhook told when a review fails (see `alert.py`)
 
     @property
     def repo_owner(self) -> str:
@@ -114,6 +115,7 @@ INSTANCE_ENV_DENYLIST = frozenset({
     "ANTHROPIC_API_KEY",
     "GITHUB_TOKEN",
     "GITHUB_APP_PRIVATE_KEY_PATH",
+    "REVIEWME_ALERT_WEBHOOK",       # where failure alerts are POSTed: a secret URL
     "PATH",
 })
 
@@ -234,4 +236,5 @@ def load_config(*, require_repo: bool = True) -> Config:
         config_source=config_source_env(),
         inline_min_severity="MINOR" if baseline
         else _severity_env("REVIEWME_INLINE_MIN_SEVERITY", "IMPORTANT"),
+        alert_webhook=os.environ.get("REVIEWME_ALERT_WEBHOOK", "").strip(),
     )

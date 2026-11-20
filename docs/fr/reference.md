@@ -14,6 +14,7 @@
 | `reviewme stats [--html F]` | compteurs et bloc qualité ; `--html` écrit le tableau de bord |
 | `reviewme feedback --pr N` | réponses des devs, en règles à relire |
 | `reviewme watch --repo O/R --every 10m` | surveille les PR ouvertes et relit chacune (`--once`, `--dry-run`, `--label`) |
+| `reviewme doctor [--test-alert]` | diagnostic de la passerelle LLM, sans afficher de secret ; `--test-alert` envoie un message de test au webhook d'alerte |
 | `reviewme-webhook` · `reviewme-poll` · `reviewme-web` | serveur webhook, boucle de poll (ancien nom de watch), tableau de bord |
 
 | Variable | Rôle |
@@ -31,6 +32,7 @@
 | `REVIEWME_TRIGGER` | ce qui a lancé le passage, noté dans le registre (`pr_build`, `manual`, `schedule`, `watch`) |
 | `REVIEWME_CONTROL_GROUP` | `enrich` : `0`/`1` remplace `[stats] control_group` |
 | `JIRA_BUG_TYPES` | `history --jira` : noms de types de ticket comptés comme bugs (défaut `Bug`) |
+| `REVIEWME_ALERT_WEBHOOK` | webhook de type Slack prévenu quand une review échoue (réglage du job, voir [Quand une review échoue](how-it-works.md#quand-une-review-échoue)) |
 | `REVIEWME_FAKE`, `REVIEWME_DEBUG` | sans appel au modèle ; journal détaillé |
 | `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | passerelle LLM, modèle |
 | `REVIEWME_SHOW_MODEL`, `REVIEWME_SHOW_SCORE`, `REVIEWME_CLEAN_NOTE` | mode simple : `[review] show_model` / `show_score` / `clean_note` |
