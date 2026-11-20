@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.7.0
+
+- `REVIEWME_ALERT_WEBHOOK`: one message to a Slack incoming webhook (or any endpoint that
+  takes a `POST` of `{"text": "…"}`) when a review fails, fully or for some reviewers. It
+  holds the repo, the PR link, the commit, the reviewers that failed and a scrubbed excerpt
+  of each error; no PR title, no diff, no finding. A job setting, never read from an
+  instance's `.env`. `reviewme doctor --test-alert` sends a test message.
+- Fix: a review whose every reviewer answered with an error (`API Error: 529 …`, `is_error`
+  in the CLI envelope) no longer ends as a success. `reviewme review` exits with code 1
+  and the commit is not marked as reviewed, so running the build again reviews it. Before,
+  the run exited 0 with nothing posted and the commit was skipped on the next build.
+- A reviewer that fails while others succeed is named in the log and in the alert; the
+  exit code stays 0 and the others' remarks are posted, as before.
+
 ## 1.6.1
 
 - Fix: the ledger now gets the `comment_id` of every posted inline finding. The ids were
