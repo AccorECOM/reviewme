@@ -76,3 +76,38 @@ arrive through a PR), and `project.toml` has no key for them.
 
 A config kept **outside** the reviewed repository (a separate config repository via
 `REVIEWME_CONFIG_HOME`) is not read from the PR, so steps 2 and 3 do not apply to it.
+
+## When a review fails
+
+An error is never posted on the PR: an `API Error` from the model or the gateway may carry
+fragments of a credential. So a failed review leaves the PR silent, and a silent PR looks
+like a clean one. Two things say otherwise:
+
+- **The exit code.** `reviewme review` exits with code 1 (the CI step fails) when no
+  reviewer delivered a review: project config rejected, usage limit, crash, or every
+  reviewer answered with an error. The commit is then not marked as reviewed, so running
+  the build again reviews it. When only some reviewers failed, the others' remarks are
+  posted and the exit code stays 0.
+- **An alert**, when `REVIEWME_ALERT_WEBHOOK` is set: one message to a chat channel, for a
+  full failure and for a partial one.
+
+```
+ReviewMe: the review of acme/shop PR #128 (commit 3f9c2a1b) failed
+https://github.com/acme/shop/pull/128
+- tech: API Error: 529 Overloaded
+Nothing was posted on the PR.
+Build: https://app.bitrise.io/build/…
+```
+
+`REVIEWME_ALERT_WEBHOOK` is the URL of a Slack incoming webhook, or of any endpoint that
+accepts the same call (`POST` of `{"text": "…"}` as JSON: Mattermost, an n8n webhook
+node). It is a secret and a **job setting**: set it in the CI secrets or in the engine's
+own `.env`, never in an instance's `.env`. The message holds the repo, the PR number and
+link, the commit, the reviewers that failed and a scrubbed excerpt of each error (none
+for an authentication error); never the PR title, the diff or a finding. The build link
+comes from `BITRISE_BUILD_URL`, the GitHub Actions run, or `REVIEWME_BUILD_URL`.
+
+`reviewme doctor --test-alert` sends a test message and exits with code 1 if the webhook
+refuses it: run it once after setting the variable. A webhook that fails later is logged
+and never changes the outcome of a review. `reviewme watch` sends one alert per failure,
+not one per round.

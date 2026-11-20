@@ -75,3 +75,40 @@ les régler (il peut arriver par une PR), et `project.toml` n'a pas de clé pour
 
 Une config gardée **hors** du dépôt relu (un dépôt de config séparé via
 `REVIEWME_CONFIG_HOME`) n'est pas lue depuis la PR : les étapes 2 et 3 ne s'appliquent pas.
+
+## Quand une review échoue
+
+Une erreur n'est jamais postée sur la PR : une `API Error` du modèle ou de la passerelle
+peut contenir des fragments d'un identifiant. Une review en échec laisse donc la PR
+silencieuse, et une PR silencieuse ressemble à une PR sans remarque. Deux choses le
+signalent :
+
+- **Le code de sortie.** `reviewme review` sort en code 1 (le step CI échoue) quand aucun
+  relecteur n'a rendu de review : config du projet refusée, limite d'usage, plantage, ou
+  tous les relecteurs ont répondu par une erreur. Le commit n'est alors pas marqué comme
+  relu : relancer le build le relit. Quand seuls certains relecteurs échouent, les
+  remarques des autres sont postées et le code de sortie reste 0.
+- **Une alerte**, si `REVIEWME_ALERT_WEBHOOK` est défini : un message dans un canal de
+  discussion, pour un échec complet comme pour un échec partiel.
+
+```
+ReviewMe: the review of acme/shop PR #128 (commit 3f9c2a1b) failed
+https://github.com/acme/shop/pull/128
+- tech: API Error: 529 Overloaded
+Nothing was posted on the PR.
+Build: https://app.bitrise.io/build/…
+```
+
+`REVIEWME_ALERT_WEBHOOK` est l'URL d'un webhook entrant Slack, ou de tout point d'entrée
+qui accepte le même appel (`POST` de `{"text": "…"}` en JSON : Mattermost, un nœud webhook
+n8n). C'est un secret et un **réglage du job** : à mettre dans les secrets de la CI ou
+dans le `.env` du moteur, jamais dans le `.env` d'une instance. Le message contient le
+dépôt, le numéro et le lien de la PR, le commit, les relecteurs en échec et un extrait
+nettoyé de chaque erreur (aucun pour une erreur d'authentification) ; jamais le titre de
+la PR, le diff ni une remarque. Le lien du build vient de `BITRISE_BUILD_URL`, du run
+GitHub Actions, ou de `REVIEWME_BUILD_URL`.
+
+`reviewme doctor --test-alert` envoie un message de test et sort en code 1 si le webhook
+le refuse : à lancer une fois après avoir défini la variable. Un webhook qui échoue plus
+tard est journalisé et ne change jamais l'issue d'une review. `reviewme watch` envoie une
+alerte par échec, pas une par tour.

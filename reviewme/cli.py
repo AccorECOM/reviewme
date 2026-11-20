@@ -128,6 +128,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                         "and whether each credential is accepted (no secret printed)")
     dr.add_argument("--model", default="", help="Model to request in the probe")
     dr.add_argument("--no-probe", action="store_true", help="Only describe the environment")
+    dr.add_argument("--test-alert", action="store_true",
+                    help="Send a test message to REVIEWME_ALERT_WEBHOOK (exit 1 if it fails)")
     # Development aid, kept out of the help list: synthetic data must never be mistaken
     # for a team's real numbers, so nothing advertises it next to the real commands.
     dd = sub.add_parser("demo-data")
@@ -532,8 +534,19 @@ def _doctor(args: argparse.Namespace) -> int:
     if not args.no_probe:
         for line in probe(model=args.model):
             print(line)
+    # Where a failed review is reported. The URL is a secret: only its host is shown.
+    from .alert import ENV_VAR, send_test, webhook_host
+    hook = os.environ.get(ENV_VAR, "").strip()
+    print(f"  {ENV_VAR}: " + (f"set (host {webhook_host(hook)})" if hook
+                              else "not set: a failed review only shows in the build log"))
+    status = 0
+    if args.test_alert:
+        ok, detail = (send_test(hook, os.environ.get("GITHUB_REPO", "")) if hook
+                      else (False, f"{ENV_VAR} is not set"))
+        print(f"  alert test: {'sent' if ok else 'FAILED'}, {detail}")
+        status = 0 if ok else 1
     print("=" * 72)
-    return 0
+    return status
 
 
 def main() -> None:

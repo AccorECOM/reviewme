@@ -31,7 +31,7 @@ from .projects import (
     resolve_project,
     select_reviewers,
 )
-from .reconciler import PreparedReview, load_pr_context, post_all, prepare
+from .reconciler import PreparedReview, cli_failed, load_pr_context, post_all, prepare
 from .reviewer import UsageLimitError, configured_model
 from .reviewer import run_review as run_reviewer
 from .scrub import scrub_text
@@ -252,7 +252,11 @@ def run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logge
     """Reviews a PR (full GitHub API dict). Returns a dict of counters."""
     import tempfile
     with tempfile.TemporaryDirectory(prefix="reviewme-config-") as workdir:
-        return _run_review(pr, config, gh, logger, force=force, workdir=workdir)
+        result = _run_review(pr, config, gh, logger, force=force, workdir=workdir)
+    # A failed review posts nothing on the PR: without this, it is only in the log.
+    from .alert import notify
+    notify(pr, config, result, logger)
+    return result
 
 
 def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logger,
@@ -330,6 +334,8 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
         historique = build_history_context(gh, pr_number, logger, engagement)
 
         outcomes: list[tuple[ReviewerSpec, object]] = []
+        # Reviewers that delivered nothing, and why: `{reviewer, error}`.
+        failures: list[dict] = []
         if len(selected) == 1:
             outcomes.append(_run_one(selected[0], pr_number, title, diff, config, context,
                                      logger, historique, changed_paths, reader, base_ref))
@@ -338,7 +344,7 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                 futures = [pool.submit(_run_one, s, pr_number, title, diff, config, context,
                                        logger, historique, changed_paths, reader, base_ref)
                            for s in selected]
-                for fut in futures:
+                for spec, fut in zip(selected, futures, strict=True):
                     try:
                         outcomes.append(fut.result())
                     except UsageLimitError:
@@ -346,10 +352,17 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                         # reviewed: the missing one would never run on it.
                         raise
                     except Exception as e:
-                        logger.error("PR #%s: reviewer failed: %s", pr_number, e)
+                        logger.error("PR #%s [%s]: reviewer failed: %s", pr_number, spec.id, e)
+                        failures.append({"reviewer": spec.id,
+                                         "error": scrub_text(str(e))[:300]})
 
         if not outcomes:
-            return {"error": "all reviewers failed"}
+            return {"error": "all reviewers failed", "failures": failures}
+
+        # The CLI answered, but with an error instead of a review (`API Error: 529 …`):
+        # nothing of it is posted, so it must count as a failure, not as a clean review.
+        failures += [{"reviewer": spec.id, "error": scrub_text(r.raw)[:300]}
+                     for spec, r in outcomes if cli_failed(r)]
 
         # --- PR cost: budget applied PER reviewer (--max-budget-usd); here we total
         # it and warn when the PR cap is exceeded (no stop: the reviewers have already run
@@ -441,6 +454,24 @@ def _run_review(pr: dict, config: Config, gh: GitHubClient, logger: logging.Logg
                               [s.id for s, _ in outcomes], counts, total_cost,
                               duration_ms, diff_size_kb, logger)
 
+        if failures:
+            names = ", ".join(f["reviewer"] for f in failures)
+            if len(failures) >= len(selected):
+                # Nobody delivered a review. The run is in the ledger and the stats
+                # (above), but the commit is NOT reviewed: marking it would skip it on
+                # the next build, and exit 0 would paint the CI green over an empty PR.
+                error = f"all reviewers failed: {names}"
+                mark_error(pr_number, head_sha, title, error, repo=config.github_repo)
+                logger.error("PR #%s: review failed: %s", pr_number, error,
+                             extra={"pr_number": pr_number, "pr_title": title,
+                                    "status": "error"})
+                return {"error": error, "failures": failures}
+            # Some did: their remarks are posted and the commit counts as reviewed, but
+            # the caller is told who is missing (see `alert.py`).
+            logger.error("PR #%s: %d of %d reviewer(s) failed: %s", pr_number,
+                         len(failures), len(selected), names)
+            counts["failures"] = failures
+
         if not config.dry_run:
             mark_reviewed(pr_number, head_sha, title, status="success",
                           repo=config.github_repo)
@@ -467,7 +498,17 @@ def run_review_by_number(pr_number: int, config: Config, logger: logging.Logger,
     own = gh is None
     gh = gh or GitHubClient(config)
     try:
-        pr = gh.get_pr(pr_number)
+        try:
+            pr = gh.get_pr(pr_number)
+        except Exception as e:
+            # Token expired, PR gone, GitHub down: no review either, and it happens
+            # before `run_review`, which is where a failure is reported.
+            result = {"error": f"cannot read PR #{pr_number} from GitHub: "
+                               f"{scrub_text(str(e))[:300]}"}
+            logger.error("PR #%s: review failed: %s", pr_number, result["error"])
+            from .alert import notify
+            notify({"number": pr_number}, config, result, logger)
+            return result
         return run_review(pr, config, gh, logger, force=force)
     finally:
         if own:

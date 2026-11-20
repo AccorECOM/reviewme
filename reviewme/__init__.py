@@ -19,6 +19,7 @@ Modules:
   github_auth.py   PAT or GitHub App (JWT RS256 -> renewed installation token)
   run.py           run_review(repo, pr, config): the function shared by all entry points
   state.py         last_reviewed_sha cache (inter-process flock)
+  alert.py         failure alert to a chat webhook (REVIEWME_ALERT_WEBHOOK)
   logging_.py      JSON + console logs
   cli.py           one-shot entry point: `reviewme review --repo O/R --pr N`
   poll.py          loop entry point (VPS mode)

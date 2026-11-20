@@ -14,6 +14,7 @@
 | `reviewme stats [--html F]` | counters and quality block; `--html` writes the dashboard |
 | `reviewme feedback --pr N` | developer replies, as rules to review |
 | `reviewme watch --repo O/R --every 10m` | poll the open PRs and review each one (`--once`, `--dry-run`, `--label`) |
+| `reviewme doctor [--test-alert]` | LLM gateway check, no secret printed; `--test-alert` sends a test message to the alert webhook |
 | `reviewme-webhook` · `reviewme-poll` · `reviewme-web` | webhook server, poll loop (legacy name of watch), dashboard |
 
 | Variable | Purpose |
@@ -31,6 +32,7 @@
 | `REVIEWME_TRIGGER` | what started the run, recorded in the ledger (`pr_build`, `manual`, `schedule`, `watch`) |
 | `REVIEWME_CONTROL_GROUP` | `enrich`: `0`/`1` overrides `[stats] control_group` |
 | `JIRA_BUG_TYPES` | `history --jira`: issue type names counted as bugs (default `Bug`) |
+| `REVIEWME_ALERT_WEBHOOK` | Slack-style webhook told when a review fails (job setting, see [When a review fails](how-it-works.md#when-a-review-fails)) |
 | `REVIEWME_FAKE`, `REVIEWME_DEBUG` | no model call; verbose log |
 | `ANTHROPIC_BASE_URL`, `CLAUDE_MODEL` | LLM gateway, model |
 | `REVIEWME_SHOW_MODEL`, `REVIEWME_SHOW_SCORE`, `REVIEWME_CLEAN_NOTE` | simple mode: `[review] show_model` / `show_score` / `clean_note` |

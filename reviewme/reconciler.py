@@ -306,6 +306,13 @@ class PreparedReview:
     language: str = "en"                                # language of posted texts
 
 
+def cli_failed(result: ReviewResult) -> bool:
+    """The CLI answered with an error (auth, gateway, API error, crash) instead of a
+    review: its text is an error message, not something to post."""
+    return not result.parsed_ok and bool(result.metadata.get("is_error")
+                                         or looks_like_auth_error(result.raw))
+
+
 def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
             logger: logging.Logger, reviewer_id: str, *,
             output_mode: str = "inline", prefix: str = "",
@@ -329,8 +336,7 @@ def prepare(pr: dict, config: Config, ctx: PrContext, result: ReviewResult,
 
     # --- CLI failure (auth, gateway, crash): nothing to post. The raw text is the
     # error message, and it may carry fragments of credentials (key suffix, key hash).
-    if not result.parsed_ok and (result.metadata.get("is_error")
-                                 or looks_like_auth_error(result.raw)):
+    if cli_failed(result):
         logger.error("PR #%s [%s]: the CLI failed (is_error=%s), no comment posted: %s",
                      pr_number, reviewer_id, result.metadata.get("is_error"),
                      _scrub(result.raw[:300]))
