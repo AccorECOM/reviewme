@@ -6,7 +6,9 @@
   takes a `POST` of `{"text": "…"}`) when a review fails, fully or for some reviewers. It
   holds the repo, the PR link, the commit, the reviewers that failed and a scrubbed excerpt
   of each error; no PR title, no diff, no finding. A job setting, never read from an
-  instance's `.env`. `reviewme doctor --test-alert` sends a test message.
+  instance's `.env`. `reviewme doctor --test-alert` sends a test message. The message
+  uses Slack's `mrkdwn` and stays within a few lines: reviewers that failed the same way
+  share one line, and link previews are off.
 - Fix: a review whose every reviewer answered with an error (`API Error: 529 …`, `is_error`
   in the CLI envelope) no longer ends as a success. `reviewme review` exits with code 1
   and the commit is not marked as reviewed, so running the build again reviews it. Before,

@@ -91,17 +91,17 @@ signalent :
 - **Une alerte**, si `REVIEWME_ALERT_WEBHOOK` est défini : un message dans un canal de
   discussion, pour un échec complet comme pour un échec partiel.
 
-```
-ReviewMe: the review of acme/shop PR #128 (commit 3f9c2a1b) failed
-https://github.com/acme/shop/pull/128
-- tech: API Error: 529 Overloaded
-Nothing was posted on the PR.
-Build: https://app.bitrise.io/build/…
-```
+> **ReviewMe: review failed** on [acme/shop #128](https://github.com/acme/shop/pull/128) (`3f9c2a1b`)
+> • **architect, tech, us**: `API Error: 529 Overloaded`
+> Nothing was posted on the PR. [Open the build](https://app.bitrise.io)
+
+Le message est écrit en `mrkdwn` Slack et tient en quelques lignes, pour que Slack ne le
+replie pas derrière « Voir plus » : les relecteurs tombés sur la même erreur partagent une
+ligne, quatre erreurs distinctes au plus sont listées, et l'aperçu des liens est coupé.
 
 `REVIEWME_ALERT_WEBHOOK` est l'URL d'un webhook entrant Slack, ou de tout point d'entrée
-qui accepte le même appel (`POST` de `{"text": "…"}` en JSON : Mattermost, un nœud webhook
-n8n). C'est un secret et un **réglage du job** : à mettre dans les secrets de la CI ou
+qui accepte le même appel (`POST` de `{"text": "…"}` en JSON, avec `unfurl_links` et
+`unfurl_media` de Slack à `false` : Mattermost, un nœud webhook n8n). C'est un secret et un **réglage du job** : à mettre dans les secrets de la CI ou
 dans le `.env` du moteur, jamais dans le `.env` d'une instance. Le message contient le
 dépôt, le numéro et le lien de la PR, le commit, les relecteurs en échec et un extrait
 nettoyé de chaque erreur (aucun pour une erreur d'authentification) ; jamais le titre de

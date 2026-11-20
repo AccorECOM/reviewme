@@ -15,6 +15,10 @@ a short scrubbed excerpt of each error. No PR title, no diff, no finding. An
 authentication error is sent without its text: a gateway prints fragments of the key it
 received.
 
+The text uses Slack's `mrkdwn` (bold, `<url|label>` links, code spans) and is kept to a
+few lines: Slack folds a long message behind "See more", and an alert nobody unfolds is
+not read. Reviewers that failed the same way share one line, and link previews are off.
+
 Best effort: a failing alert is logged and never changes the outcome of the review.
 """
 from __future__ import annotations
@@ -31,7 +35,8 @@ from .scrub import scrub_text
 
 ENV_VAR = "REVIEWME_ALERT_WEBHOOK"
 _TIMEOUT_S = 10.0
-_EXCERPT_CHARS = 300
+_EXCERPT_CHARS = 200
+_MAX_LINES = 4        # distinct errors listed; the rest is in the build log
 _AUTH_WITHHELD = ("authentication error (text withheld: it can carry fragments of a "
                   "credential; the build log has the diagnostics)")
 
@@ -55,12 +60,35 @@ def _escape(text: str) -> str:
 
 
 def _excerpt(text: str) -> str:
+    """One error, as a code span: scrubbed, on one line, cut short."""
     if looks_like_auth_error(text):
         return _AUTH_WITHHELD
-    flat = " ".join(scrub_text(text).split())
+    flat = " ".join(scrub_text(text).split()).replace("`", "'")
     if len(flat) > _EXCERPT_CHARS:
         flat = flat[:_EXCERPT_CHARS].rstrip() + "…"
-    return _escape(flat) or "no error text"
+    return f"`{_escape(flat)}`" if flat else "no error text"
+
+
+def _link(url: str, label: str) -> str:
+    """`<url|label>`, or the label alone when the URL could break out of the link."""
+    url = (url or "").strip()
+    if not url.startswith(("https://", "http://")) or any(c in url for c in "<>| \n\t"):
+        return _escape(label)
+    return f"<{url}|{_escape(label)}>"
+
+
+def _error_lines(failures: list[dict]) -> list[str]:
+    """One line per distinct error, naming every reviewer that hit it: seven reviewers
+    stopped by the same outage are one line, not seven."""
+    groups: dict[str, list[str]] = {}
+    for f in failures:
+        groups.setdefault(_excerpt(f.get("error") or ""), []).append(
+            _escape(str(f["reviewer"])).replace("*", ""))
+    lines = [f"• *{', '.join(names)}*: {error}" for error, names in groups.items()]
+    if len(lines) > _MAX_LINES:
+        hidden = len(lines) - (_MAX_LINES - 1)
+        lines = [*lines[:_MAX_LINES - 1], f"• and {hidden} other errors, see the build log"]
+    return lines
 
 
 def build_url(env: Mapping[str, str] | None = None) -> str:
@@ -90,43 +118,41 @@ def failure_text(pr: dict, config, result: dict,
     repo = getattr(config, "github_repo", "") or "?"
     number = pr.get("number")
     sha = ((pr.get("head") or {}).get("sha") or "")[:8]
-    where = f"{repo} PR #{number}" + (f" (commit {sha})" if sha else "")
+    where = _link(pr.get("html_url") or f"https://github.com/{repo}/pull/{number}",
+                  f"{repo} #{number}")
+    if sha:
+        where += f" (`{sha}`)"
     if getattr(config, "dry_run", False):
         where += " [dry-run]"
-    names = _escape(", ".join(f["reviewer"] for f in failures))
 
     if result.get("usage_limit"):
-        head = f"ReviewMe: usage limit reached, {where} was not reviewed"
+        head = f"*ReviewMe: usage limit reached*, {where} was not reviewed"
         outcome = "Nothing was posted on the PR. Run the review again after the reset."
     elif error:
-        head = f"ReviewMe: the review of {where} failed"
+        head = f"*ReviewMe: review failed* on {where}"
         outcome = "Nothing was posted on the PR."
     else:
-        head = f"ReviewMe: {len(failures)} reviewer(s) failed on {where}: {names}"
+        head = f"*ReviewMe: {len(failures)} reviewer(s) failed* on {where}"
         outcome = "The other reviewers ran to the end; these ones posted nothing."
 
-    lines = [head, pr.get("html_url") or f"https://github.com/{repo}/pull/{number}"]
-    if failures:
-        lines += [f"- {_escape(f['reviewer'])}: {_excerpt(f.get('error') or '')}"
-                  for f in failures]
-    else:
-        lines.append(f"- {_excerpt(str(error))}")
-    lines.append(outcome)
     build = build_url(env)
     if build:
-        lines.append(f"Build: {build}")
-    return "\n".join(lines)
+        outcome += " " + _link(build, "Open the build")
+    details = _error_lines(failures) if failures else [f"• {_excerpt(str(error))}"]
+    return "\n".join([head, *details, outcome])
 
 
 def send(url: str, text: str) -> tuple[bool, str]:
-    """Posts `{"text": text}` to the webhook. Returns (sent, detail); never raises, and
-    the detail never contains the URL."""
+    """Posts `{"text": text}` (plus Slack's two "no link preview" switches) to the
+    webhook. Returns (sent, detail); never raises, and the detail never contains the URL."""
     import httpx
     if urlparse(url).scheme not in ("https", "http"):
         return False, f"{ENV_VAR} is not an http(s) URL"
     host = webhook_host(url)
     try:
-        resp = httpx.post(url, json={"text": text}, timeout=_TIMEOUT_S)
+        # No preview of the PR or build link under the alert: it would triple its height.
+        resp = httpx.post(url, json={"text": text, "unfurl_links": False,
+                                     "unfurl_media": False}, timeout=_TIMEOUT_S)
     except Exception as e:   # httpx.HTTPError, InvalidURL...: its message may quote the URL
         return False, f"{host} unreachable ({type(e).__name__})"
     if resp.status_code >= 300:
@@ -165,4 +191,4 @@ def notify(pr: dict, config, result: dict, logger: logging.Logger) -> bool:
 def send_test(url: str, repo: str = "") -> tuple[bool, str]:
     """`reviewme doctor --test-alert`: proves the webhook works before a failure needs it."""
     about = f" for {_escape(repo)}" if repo else ""
-    return send(url, f"ReviewMe: test message{about}. Failed reviews will be reported here.")
+    return send(url, f"*ReviewMe: test message*{about}. Failed reviews will be reported here.")

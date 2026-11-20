@@ -91,17 +91,17 @@ like a clean one. Two things say otherwise:
 - **An alert**, when `REVIEWME_ALERT_WEBHOOK` is set: one message to a chat channel, for a
   full failure and for a partial one.
 
-```
-ReviewMe: the review of acme/shop PR #128 (commit 3f9c2a1b) failed
-https://github.com/acme/shop/pull/128
-- tech: API Error: 529 Overloaded
-Nothing was posted on the PR.
-Build: https://app.bitrise.io/build/…
-```
+> **ReviewMe: review failed** on [acme/shop #128](https://github.com/acme/shop/pull/128) (`3f9c2a1b`)
+> • **architect, tech, us**: `API Error: 529 Overloaded`
+> Nothing was posted on the PR. [Open the build](https://app.bitrise.io)
+
+The message is written in Slack's `mrkdwn` and stays within a few lines so Slack does not
+fold it behind "See more": reviewers that failed the same way share one line, at most four
+distinct errors are listed, and link previews are turned off.
 
 `REVIEWME_ALERT_WEBHOOK` is the URL of a Slack incoming webhook, or of any endpoint that
-accepts the same call (`POST` of `{"text": "…"}` as JSON: Mattermost, an n8n webhook
-node). It is a secret and a **job setting**: set it in the CI secrets or in the engine's
+accepts the same call (`POST` of `{"text": "…"}` as JSON, plus Slack's `unfurl_links` and
+`unfurl_media` set to `false`: Mattermost, an n8n webhook node). It is a secret and a **job setting**: set it in the CI secrets or in the engine's
 own `.env`, never in an instance's `.env`. The message holds the repo, the PR number and
 link, the commit, the reviewers that failed and a scrubbed excerpt of each error (none
 for an authentication error); never the PR title, the diff or a finding. The build link

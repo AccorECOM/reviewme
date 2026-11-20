@@ -75,19 +75,22 @@ def test_full_failure_names_the_pr_the_reviewer_and_the_error():
               "failures": [{"reviewer": "tech", "error": "API Error: 529 Overloaded"}]}
     text = alert.failure_text(PR, _config(), result,
                               env={"BITRISE_BUILD_URL": "https://app.bitrise.io/build/abc"})
-    assert "o/r PR #7 (commit abcdef12)" in text and "failed" in text
-    assert "https://github.com/o/r/pull/7" in text
-    assert "- tech: API Error: 529 Overloaded" in text
-    assert "Nothing was posted on the PR." in text
-    assert "Build: https://app.bitrise.io/build/abc" in text
+    lines = text.splitlines()
+    assert lines[0] == ("*ReviewMe: review failed* on "
+                        "<https://github.com/o/r/pull/7|o/r #7> (`abcdef12`)")
+    assert lines[1] == "• *tech*: `API Error: 529 Overloaded`"
+    assert lines[2] == ("Nothing was posted on the PR. "
+                        "<https://app.bitrise.io/build/abc|Open the build>")
+    assert len(lines) == 3                         # short enough to stay unfolded in Slack
     assert "Secret roadmap title" not in text      # no PR title leaves the engine
 
 
 def test_partial_failure_says_the_others_ran():
     result = {"posted": 3, "failures": [{"reviewer": "us", "error": "API Error: 500"}]}
     text = alert.failure_text(PR, _config(), result, env={})
-    assert "1 reviewer(s) failed on o/r PR #7" in text and "- us: API Error: 500" in text
-    assert "The other reviewers ran to the end" in text and "Build:" not in text
+    assert text.startswith("*ReviewMe: 1 reviewer(s) failed* on <")
+    assert "• *us*: `API Error: 500`" in text
+    assert "The other reviewers ran to the end" in text and "Open the build" not in text
 
 
 def test_usage_limit_is_reported_as_such():
@@ -98,7 +101,7 @@ def test_usage_limit_is_reported_as_such():
 
 def test_error_without_a_reviewer_is_still_reported():
     text = alert.failure_text(PR, _config(), {"error": "project config: no reviewer"}, env={})
-    assert "- project config: no reviewer" in text
+    assert "• `project config: no reviewer`" in text
 
 
 def test_auth_error_text_is_withheld():
@@ -120,7 +123,40 @@ def test_secrets_and_slack_markup_never_reach_the_channel():
 
 def test_long_error_is_cut():
     text = alert.failure_text(PR, _config(), {"error": "x" * 5000}, env={})
-    assert len(text) < 800
+    assert len(text) < 500
+
+
+def test_reviewers_stopped_by_the_same_error_share_one_line():
+    """Seven reviewers hit by one outage: three lines, not nine behind "See more"."""
+    ids = ["architect", "tech", "us", "i18n", "a11y", "perf", "advisor"]
+    result = {"error": "all reviewers failed",
+              "failures": [{"reviewer": r, "error": "API Error: 529 Overloaded"} for r in ids]}
+    lines = alert.failure_text(PR, _config(), result, env={}).splitlines()
+    assert len(lines) == 3
+    assert lines[1] == f"• *{', '.join(ids)}*: `API Error: 529 Overloaded`"
+
+
+def test_many_distinct_errors_are_capped():
+    result = {"error": "x", "failures": [{"reviewer": f"r{i}", "error": f"failure {i}"}
+                                         for i in range(7)]}
+    lines = alert.failure_text(PR, _config(), result, env={}).splitlines()
+    assert len(lines) == 2 + alert._MAX_LINES
+    assert lines[1] == "• *r0*: `failure 0`"
+    assert lines[-2] == "• and 4 other errors, see the build log"
+
+
+def test_error_text_cannot_break_the_formatting():
+    result = {"error": "x", "failures": [{"reviewer": "te*ch", "error": "bad `code` here"}]}
+    text = alert.failure_text(PR, _config(), result, env={})
+    assert "• *tech*: `bad 'code' here`" in text
+
+
+def test_a_build_url_that_is_not_a_plain_link_is_not_linked():
+    for bad in ("https://ci.example/x|<!channel>", "javascript:alert(1)", "https://a b"):
+        text = alert.failure_text(PR, _config(), {"error": "boom"},
+                                  env={"REVIEWME_BUILD_URL": bad})
+        assert "<!channel>" not in text and "javascript" not in text
+        assert text.endswith("Open the build")
 
 
 def test_build_url_from_github_actions():
@@ -139,8 +175,10 @@ def test_webhook_receives_a_slack_payload(hook):
                          "failures": [{"reviewer": "tech", "error": "API Error: 529"}]}, LOGGER)
     assert sent and len(received) == 1
     assert received[0]["type"] == "application/json"
-    assert list(received[0]["json"]) == ["text"]            # the Slack contract, nothing else
-    assert "API Error: 529" in received[0]["json"]["text"]
+    payload = received[0]["json"]
+    assert set(payload) == {"text", "unfurl_links", "unfurl_media"}
+    assert payload["unfurl_links"] is False and payload["unfurl_media"] is False
+    assert "API Error: 529" in payload["text"]
 
 
 def test_no_webhook_no_call_and_no_error(hook):
@@ -192,7 +230,7 @@ def test_test_message(hook):
     url, received, _ = hook
     ok, detail = alert.send_test(url, "o/r")
     assert ok and "secretpath" not in detail
-    assert "test message for o/r" in received[0]["json"]["text"]
+    assert "*ReviewMe: test message* for o/r" in received[0]["json"]["text"]
 
 
 def test_instance_env_cannot_redirect_alerts(tmp_path, monkeypatch):
@@ -321,13 +359,13 @@ def test_api_error_is_a_failed_review_not_a_clean_one(engine):
     assert not gh.posted and not gh.reviews                  # the error text stays off the PR
     assert not state.is_reviewed(7, PR["head"]["sha"], "o/r")   # a rebuild runs it again
     assert state.failed_at(7, PR["head"]["sha"], "o/r")         # a loop does not
-    assert len(sent) == 1 and "- tech: API Error: 529 Overloaded" in sent[0]["text"]
+    assert len(sent) == 1 and "• *tech*: `API Error: 529 Overloaded`" in sent[0]["text"]
 
 
 def test_every_reviewer_in_error_fails_the_run(engine):
     out, _, sent, _ = engine(tech=_api_error(), us=RuntimeError("claude returncode=1"))
     assert out["error"] == "all reviewers failed: us, tech"
-    assert "- us: claude returncode=1" in sent[0]["text"] and "- tech:" in sent[0]["text"]
+    assert "• *us*: `claude returncode=1`" in sent[0]["text"] and "• *tech*:" in sent[0]["text"]
 
 
 def test_one_reviewer_in_error_keeps_the_others_and_alerts(engine):
@@ -358,4 +396,5 @@ def test_unreadable_pr_is_reported_too(monkeypatch):
     out = R.run_review_by_number(7, _config(alert_webhook="https://hooks.example/x"), LOGGER,
                                  gh=_Down())
     assert out["error"].startswith("cannot read PR #7 from GitHub")
-    assert len(sent) == 1 and "o/r PR #7 failed" in sent[0] and "503" in sent[0]
+    assert len(sent) == 1 and "503" in sent[0]
+    assert sent[0].startswith("*ReviewMe: review failed* on <https://github.com/o/r/pull/7|o/r #7>")
